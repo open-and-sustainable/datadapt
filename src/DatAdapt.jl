@@ -51,8 +51,8 @@ function transform_data(table::String)
         DatabaseAccess.write_duckdb_table!(E_processed, DB_PATH_PROCESSED, "exposure_country_year")
     elseif table == "hazard"
         # Process the "hazard" table
-        H_processed = DatabaseAccess.executePRQL(DB_PATH_RAW, "src/DataTransform/hazard_transform.prql")
-        DatabaseAccess.write_duckdb_table!(H_processed, DB_PATH_PROCESSED, "hazard_processed")
+        H_processed = DatabaseAccess.executePRQL(DB_PATH_RAW, "src/DataTransform/hazard_country_year.prql")
+        DatabaseAccess.write_duckdb_table!(H_processed, DB_PATH_PROCESSED, "hazard_country_year")
     else
         println("Table name not recognized. Please provide a valid table name.")
     end

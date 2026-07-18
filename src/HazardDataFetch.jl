@@ -21,14 +21,22 @@ const DATA_DIR = "DatAdapt-database/raw/era5_daily"
 const COUNTRIES_URL = "https://naciscdn.org/naturalearth/10m/cultural/ne_10m_admin_0_countries.zip"
 
 # (variable, daily_statistic) pairs downloaded from the CDS.
-# Values keep native ERA5 units: 2m_temperature [K],
-# total_precipitation / potential_evaporation / runoff [m of water equivalent],
-# volumetric_soil_water_layer_3 [m^3/m^3], instantaneous_10m_wind_gust [m/s].
+# Values keep native ERA5 units: temperatures/dewpoint [K],
+# total_precipitation / potential_evaporation / runoff / snowfall /
+# snow_depth [m of water equivalent], volumetric_soil_water_layer_3
+# [m^3/m^3], instantaneous_10m_wind_gust [m/s],
+# mean_sea_level_pressure [Pa], CAPE [J/kg].
 const VARIABLE_STATS = [
     ("2m_temperature", "daily_minimum"),
     ("2m_temperature", "daily_maximum"),
+    ("2m_temperature", "daily_mean"),
+    ("2m_dewpoint_temperature", "daily_mean"),
     ("instantaneous_10m_wind_gust", "daily_maximum"),
+    ("mean_sea_level_pressure", "daily_minimum"),
+    ("convective_available_potential_energy", "daily_maximum"),
     ("total_precipitation", "daily_sum"),
+    ("snowfall", "daily_sum"),
+    ("snow_depth", "daily_mean"),
     ("potential_evaporation", "daily_sum"),
     ("surface_runoff", "daily_sum"),
     ("sub_surface_runoff", "daily_sum"),
