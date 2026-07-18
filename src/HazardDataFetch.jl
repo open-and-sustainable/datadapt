@@ -1,189 +1,410 @@
 module HazardDataFetch
 
-using HTTP
-using Tar
 using DataFrames
-using CSV
-using CodecZlib
 using Dates
+using Statistics
+using CSV
+using HTTP
+using JSON
 using NCDatasets
-using PyCall
-using Shapefile, LibGEOS, GeoDataFrames
+using ZipFile
+using Shapefile
+using GeoInterface
+using LibGEOS
+
+using ..CDSAPI
 
 export fetch_hazard_data
 
+const DATASET = "derived-era5-single-levels-daily-statistics"
+const DATA_DIR = "DatAdapt-database/raw/era5_daily"
+const COUNTRIES_URL = "https://naciscdn.org/naturalearth/10m/cultural/ne_10m_admin_0_countries.zip"
 
+# (variable, daily_statistic) pairs downloaded from the CDS.
+# Values keep native ERA5 units: 2m_temperature [K],
+# total_precipitation / potential_evaporation / runoff [m of water equivalent],
+# volumetric_soil_water_layer_3 [m^3/m^3], instantaneous_10m_wind_gust [m/s].
+const VARIABLE_STATS = [
+    ("2m_temperature", "daily_minimum"),
+    ("2m_temperature", "daily_maximum"),
+    ("instantaneous_10m_wind_gust", "daily_maximum"),
+    ("total_precipitation", "daily_sum"),
+    ("potential_evaporation", "daily_sum"),
+    ("surface_runoff", "daily_sum"),
+    ("sub_surface_runoff", "daily_sum"),
+    ("volumetric_soil_water_layer_3", "daily_mean"),
+]
+
+"""
+    fetch_hazard_data(start_year, end_year) -> DataFrame
+
+Download ERA5 post-processed daily statistics from the CDS and aggregate them
+to country-day level. Returns a long-format DataFrame with columns:
+date, country_iso3, variable, statistic, value_mean (area-weighted),
+value_min, value_max, n_cells.
+
+Progress is checkpointed per year in `DATA_DIR/country_daily_<year>.csv`;
+already-processed years are skipped, so interrupted runs can be resumed.
+"""
 function fetch_hazard_data(start_year::Int, end_year::Int)
-    data = fetch_era5_data(start_year, end_year)
-    return data
+    if start_year < 1940
+        @warn "ERA5 starts in 1940; adjusting start year from $start_year to 1940"
+        start_year = 1940
+    end
+    mkpath(DATA_DIR)
+
+    yearly = DataFrame[]
+    for year in start_year:end_year
+        csv_path = joinpath(DATA_DIR, "country_daily_$year.csv")
+        if isfile(csv_path)
+            println("Year $year already processed. Loading checkpoint.")
+            push!(yearly, load_checkpoint(csv_path))
+        else
+            df = process_year(year)
+            CSV.write(csv_path, df)
+            cleanup_parts(year)
+            push!(yearly, df)
+        end
+    end
+    return vcat(yearly...)
 end
 
-function fetch_era5_data(start_year::Int, end_year::Int)
-    destination_dir = "DatAdapt-database/raw/era5/"
-    mkpath(destination_dir)
-    
-    # Define the years and months you want to download
-    years = string.(start_year:end_year)
-    months = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
-    
-    dataset = "reanalysis-era5-single-levels"
+function load_checkpoint(csv_path::String)
+    return CSV.read(csv_path, DataFrame;
+        types = Dict(:date => Date, :country_iso3 => String,
+                     :variable => String, :statistic => String))
+end
 
-    # Import the cdsapi Python module and create the client inside the function
-    cdsc = pyimport("cdsapi")
-    c = cdsc.Client()
+# Each (variable, statistic) is checkpointed separately so an interrupted
+# run only loses the piece it was working on. All CDS jobs for the year
+# are submitted up front so they queue on the CDS in parallel; results
+# are downloaded and aggregated as each job finishes.
+function process_year(year::Int)
+    results = Vector{Union{Nothing, DataFrame}}(nothing, length(VARIABLE_STATS))
+    jobs = load_job_registry(year)
+    pending = Int[]
 
-    # Loop through each year and month to download data
-    for year in years
-        for month in months
-            output_file = joinpath(destination_dir, "era5_data_$year-$month.nc")
-            
-            if isfile(output_file)
-                println("File $output_file already exists. Skipping download.")
+    for (i, (variable, statistic)) in enumerate(VARIABLE_STATS)
+        if isfile(part_checkpoint_path(variable, statistic, year))
+            println("$variable / $statistic for $year already aggregated. Loading checkpoint.")
+            results[i] = load_checkpoint(part_checkpoint_path(variable, statistic, year))
+        elseif isfile(nc_path(variable, statistic, year))
+            results[i] = aggregate_part(variable, statistic, year)
+        else
+            key = registry_key(variable, statistic)
+            job_id = get(jobs, key, "")
+            if !isempty(job_id) && !job_is_alive(job_id)
+                job_id = ""
+            end
+            if isempty(job_id)
+                println("Requesting $variable / $statistic for $year from the CDS...")
+                job_id = CDSAPI.submit_job(DATASET, cds_request(variable, statistic, year))
+                jobs[key] = job_id
+                save_job_registry(year, jobs)
             else
-                println("Downloading ERA5 data for $year-$month...")
+                println("Re-attaching to CDS job $job_id for $variable / $statistic $year.")
+            end
+            push!(pending, i)
+        end
+    end
 
-                # Define the parameters as a Julia Dict, which will be passed to Python
-                # Temperature is measured in Kelvin, subtract 273.15 to convert to Celsius
-                # Total precipitation is measured in m, rain and snow
-                # Wind speed is measured in m/s, Instantaneous 10 metre wind gust (10 meters height)
-                # Potential evaporation is measured in m
-                request_params = Dict(
-                    "product_type" => "reanalysis",
-                    "variable" => [
-                        "2m_temperature", "total_precipitation", "potential_evaporation",
-                        "sub_surface_runoff", "surface_runoff", 
-                        "volumetric_soil_water_layer_3", "instantaneous_10m_wind_gust"
-                    ],
-                    "year" => year,
-                    "month" => month,
-                    "day" => ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10",
-                              "11", "12", "13", "14", "15", "16", "17", "18", "19", "20",
-                              "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31"],
-                    "time" => ["00:00", "01:00", "02:00", "03:00", "04:00", "05:00", "06:00", "07:00",
-                               "08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00",
-                               "16:00", "17:00", "18:00", "19:00", "20:00", "21:00", "22:00", "23:00"],
-                    "format" => "netcdf",
-                    "download_format" => "unarchived"
-                )
-
-                # Retrieve the data using the client
-                result = c.retrieve(dataset, request_params)
-                result.download(output_file)
-
-                println("Download complete: $output_file")
-
-                # Process the NetCDF file into a DataFrame
-                # Load the NetCDF file
-                dataset = Dataset(output_file)
-
-                # Extract variables
-                t2m = dataset["t2m"][:]  # 2 meter temperature
-                tp = dataset["tp"][:]    # Total precipitation
-                i10fg = dataset["i10fg"][:]  # Instantaneous 10m wind gust
-                pev = dataset["pev"][:]   # Potential evaporation
-                latitude = dataset["latitude"][:]
-                longitude = dataset["longitude"][:]
-                valid_time = dataset["valid_time"][:]  # Time variable
-
-                # Convert time to DateTime format
-                times = DateTime.(valid_time, Dates.DateFormat("yyyy-mm-ddTHH:MM:SS"))
-
-                # Group data by day
-                days = unique(Date.(times))
-
-                # Initialize arrays to hold daily values
-                daily_min_temp = fill(NaN, length(latitude), length(longitude), length(days))
-                daily_max_temp = fill(NaN, length(latitude), length(longitude), length(days))
-                daily_avg_evap = fill(NaN, length(latitude), length(longitude), length(days))
-                daily_max_gusts = fill(NaN, length(latitude), length(longitude), length(days))
-
-                # Loop over each day and calculate daily statistics
-                for day_idx in eachindex(days)
-                    day = days[day_idx]
-                    day_mask = Date.(times) .== day
-
-                    for i in axes(latitude, 1)
-                        for j in axes(longitude, 1)
-                            daily_min_temp[i, j, day_idx] = minimum(t2m[i, j, day_mask])
-                            daily_max_temp[i, j, day_idx] = maximum(t2m[i, j, day_mask])
-                            daily_avg_evap[i, j, day_idx] = mean(pev[i, j, day_mask])
-                            daily_max_gusts[i, j, day_idx] = maximum(i10fg[i, j, day_mask])
-                        end
-                    end
-                end
-
-                # Load shapefile with country boundaries
-                shapefile = Shapefile.Table("DatAdapt-database/raw/World_Countries.shp")
-
-                # Create a GEOS context for point-in-polygon operations
-                context = LibGEOS.Context()
-
-               # Initialize matrix to store country assignments
-                country_assignment = fill("", axes(latitude, 1), axes(longitude, 1))
-
-                # Assign grid points to countries using axes for indexing
-                for i in axes(latitude, 1)
-                    for j in axes(longitude, 1)
-                        point = LibGEOS.Point(longitude[j], latitude[i])
-                        for feature in shapefile
-                            if LibGEOS.intersects(point, feature.geometry)  # Qualify the intersects function
-                                country_assignment[i, j] = feature.properties["country_name"]
-                                break
-                            end
-                        end
-                    end
-                end
-
-
-                sea_mask = country_assignment .== ""
-
-                # Apply the mask to filter out sea points
-                filtered_min_temp = daily_min_temp[!sea_mask]
-                filtered_max_temp = daily_max_temp[!sea_mask]
-                filtered_avg_evap = daily_avg_evap[!sea_mask]
-                filtered_max_gusts = daily_max_gusts[!sea_mask]
-                filtered_countries = country_assignment[!sea_mask]
-
-                df = DataFrame(
-                    Date = repeat(days, outer=[length(filtered_countries)]),
-                    Country = filtered_countries,
-                    MinTemperature = filtered_min_temp,
-                    MaxTemperature = filtered_max_temp,
-                    AvgEvapotranspiration = filtered_avg_evap,
-                    MaxGusts = filtered_max_gusts
-                )
-
-                # Save to a CSV or another suitable format
-                csv_file = joinpath(destination_dir, "era5_data_$year-$month.csv")
-                CSV.write(csv_file, df)
-
-                # close access to dataset
-                close(dataset)
-                # remove downloaded file
+    delay = 10.0
+    while !isempty(pending)
+        progressed = false
+        for i in copy(pending)
+            variable, statistic = VARIABLE_STATS[i]
+            key = registry_key(variable, statistic)
+            job_id = jobs[key]
+            status, message = CDSAPI.job_status(job_id)
+            if status == "successful"
+                println("CDS job $job_id ($variable / $statistic $year) finished.")
+                archive_path = nc_path(variable, statistic, year) * ".download"
+                CDSAPI.download_result(job_id, archive_path)
+                extract_netcdf(archive_path, nc_path(variable, statistic, year))
+                results[i] = aggregate_part(variable, statistic, year)
+                delete!(jobs, key)
+                save_job_registry(year, jobs)
+                filter!(!=(i), pending)
+                progressed = true
+                delay = 10.0
+            elseif status in ("failed", "dismissed")
+                delete!(jobs, key)
+                save_job_registry(year, jobs)
+                error("CDS job $job_id for $variable / $statistic $year $status: " *
+                      (isempty(message) ? "no error message provided" : message))
             end
         end
-    end
-    return DataFrame()
-end
-
-function process_nc_file(file::String)
-    # Load the NetCDF file and process it into a DataFrame
-    ds = Dataset(file)
-    varnames = keys(ds)
-    df = DataFrame()
-    
-    for varname in varnames
-        var = ds[varname]
-        if ndims(var) == 2  # Assuming 2D data for simplicity
-            df[!, Symbol(varname)] = vec(var[:])
-        elseif ndims(var) == 3  # Handle 3D data
-            df[!, Symbol(varname)] = vec(var[:, :, 1])  # Modify according to your needs
+        if !isempty(pending) && !progressed
+            sleep(delay)
+            delay = min(delay * 1.5, 120.0)
         end
     end
-    
-    close(ds)
+    return vcat(results...)
+end
+
+function cds_request(variable::String, statistic::String, year::Int)
+    # One variable x one year stays below the CDS request cost limit
+    # (400 variable-days per request for this dataset)
+    return Dict(
+        "product_type" => "reanalysis",
+        "variable" => [variable],
+        "year" => string(year),
+        "month" => [lpad(m, 2, '0') for m in 1:12],
+        "day" => [lpad(d, 2, '0') for d in 1:31],
+        "daily_statistic" => statistic,
+        "time_zone" => "utc+00:00",
+        "frequency" => "1_hourly",
+    )
+end
+
+function aggregate_part(variable::String, statistic::String, year::Int)
+    path = nc_path(variable, statistic, year)
+    countries = get_country_assignment(path)
+    println("Aggregating $variable / $statistic for $year...")
+    df = aggregate_country_daily(path, variable, statistic, countries)
+    CSV.write(part_checkpoint_path(variable, statistic, year), df)
+    rm(path)
     return df
 end
 
-
+function job_is_alive(job_id::String)
+    status, _ = try
+        CDSAPI.job_status(job_id)
+    catch
+        return false
+    end
+    return status in ("accepted", "running", "successful")
 end
+
+nc_path(variable, statistic, year) =
+    joinpath(DATA_DIR, "era5_$(variable)_$(statistic)_$year.nc")
+
+part_checkpoint_path(variable, statistic, year) =
+    joinpath(DATA_DIR, "part_$(variable)_$(statistic)_$year.csv")
+
+registry_key(variable, statistic) = "$variable|$statistic"
+
+job_registry_path(year) = joinpath(DATA_DIR, "cds_jobs_$year.json")
+
+function load_job_registry(year::Int)
+    path = job_registry_path(year)
+    isfile(path) || return Dict{String, String}()
+    return Dict{String, String}(JSON.parsefile(path))
+end
+
+save_job_registry(year::Int, jobs::Dict{String, String}) =
+    write(job_registry_path(year), JSON.json(jobs))
+
+function cleanup_parts(year::Int)
+    for (variable, statistic) in VARIABLE_STATS
+        path = part_checkpoint_path(variable, statistic, year)
+        isfile(path) && rm(path)
+    end
+    registry = job_registry_path(year)
+    isfile(registry) && rm(registry)
+end
+
+# ---------------------------------------------------------------------------
+# Download
+# ---------------------------------------------------------------------------
+
+# The CDS delivers daily statistics as a zip holding one NetCDF file per
+# variable, but single-file requests may arrive as plain NetCDF
+function extract_netcdf(archive_path::String, nc_path::String)
+    magic = open(io -> read(io, 2), archive_path)
+    if magic == UInt8['P', 'K']
+        archive = ZipFile.Reader(archive_path)
+        members = filter(f -> endswith(f.name, ".nc"), archive.files)
+        length(members) == 1 ||
+            error("Expected exactly one NetCDF file in $archive_path, found $(length(members))")
+        open(nc_path, "w") do out
+            write(out, read(members[1]))
+        end
+        close(archive)
+        rm(archive_path)
+    else
+        mv(archive_path, nc_path)
+    end
+end
+
+# ---------------------------------------------------------------------------
+# Country assignment of grid cells
+# ---------------------------------------------------------------------------
+
+function ensure_countries_shapefile()
+    dir = joinpath(DATA_DIR, "countries")
+    shp_path = joinpath(dir, "ne_10m_admin_0_countries.shp")
+    isfile(shp_path) && return shp_path
+
+    mkpath(dir)
+    zip_path = joinpath(dir, "ne_10m_admin_0_countries.zip")
+    println("Downloading Natural Earth country boundaries...")
+    HTTP.download(COUNTRIES_URL, zip_path)
+    archive = ZipFile.Reader(zip_path)
+    for f in archive.files
+        open(joinpath(dir, basename(f.name)), "w") do out
+            write(out, read(f))
+        end
+    end
+    close(archive)
+    rm(zip_path)
+    return shp_path
+end
+
+"""
+    get_country_assignment(nc_path) -> Dict{String, NamedTuple}
+
+Assign every grid cell of the NetCDF file's lon/lat grid to a country
+(ISO3 code) by point-in-polygon test against Natural Earth boundaries.
+Returns a Dict mapping ISO3 => (cells, weights) where cells are
+CartesianIndex{2} into (lon, lat) arrays and weights are cos(latitude)
+area weights. The assignment is computed once and cached as CSV.
+"""
+function get_country_assignment(nc_path::String)
+    lon, lat = Dataset(nc_path) do ds
+        Float64.(ds["longitude"][:]), Float64.(ds["latitude"][:])
+    end
+
+    cache_path = joinpath(DATA_DIR, "grid_country_assignment_$(length(lon))x$(length(lat)).csv")
+    if isfile(cache_path)
+        df = CSV.read(cache_path, DataFrame; types = Dict(:iso3 => String))
+        return build_country_cells(df, lat)
+    end
+
+    println("Assigning grid cells to countries (done once, may take a while)...")
+    shp_path = ensure_countries_shapefile()
+    features = load_country_features(shp_path)
+
+    lon_idx = Int[]
+    lat_idx = Int[]
+    iso3 = String[]
+    for (j, λ) in enumerate(lon)
+        x = λ > 180 ? λ - 360 : λ  # ERA5 uses 0..360, Natural Earth -180..180
+        for (i, φ) in enumerate(lat)
+            point = LibGEOS.Point(x, φ)
+            for f in features
+                if f.left <= x <= f.right && f.bottom <= φ <= f.top &&
+                   LibGEOS.intersects(f.prepared, point)
+                    push!(lon_idx, j)
+                    push!(lat_idx, i)
+                    push!(iso3, f.iso3)
+                    break
+                end
+            end
+        end
+    end
+    df = DataFrame(lon_idx = lon_idx, lat_idx = lat_idx, iso3 = iso3)
+    CSV.write(cache_path, df)
+    println("Assigned $(nrow(df)) land cells to $(length(unique(df.iso3))) countries.")
+    return build_country_cells(df, lat)
+end
+
+function load_country_features(shp_path::String)
+    table = Shapefile.Table(shp_path)
+    features = []
+    for row in table
+        geom = Shapefile.shape(row)
+        geom === nothing && continue
+        code = row.ISO_A3
+        # Natural Earth marks some ISO codes as -99 (e.g. France, Norway)
+        if code === missing || code == "-99"
+            code = row.ADM0_A3
+        end
+        mbr = geom.MBR
+        prepared = LibGEOS.prepareGeom(GeoInterface.convert(LibGEOS, geom))
+        push!(features, (iso3 = String(code), prepared = prepared,
+                         left = mbr.left, right = mbr.right,
+                         bottom = mbr.bottom, top = mbr.top))
+    end
+    return features
+end
+
+function build_country_cells(df::DataFrame, lat::Vector{Float64})
+    countries = Dict{String, NamedTuple{(:cells, :weights), Tuple{Vector{CartesianIndex{2}}, Vector{Float64}}}}()
+    for group in groupby(df, :iso3)
+        cells = [CartesianIndex(r.lon_idx, r.lat_idx) for r in eachrow(group)]
+        weights = [cosd(lat[r.lat_idx]) for r in eachrow(group)]
+        countries[group.iso3[1]] = (cells = cells, weights = weights)
+    end
+    return countries
+end
+
+# ---------------------------------------------------------------------------
+# Aggregation to country-day level
+# ---------------------------------------------------------------------------
+
+function aggregate_country_daily(nc_path::String, variable::String, statistic::String, countries)
+    Dataset(nc_path) do ds
+        varname = find_data_variable(ds)
+        v = ds[varname]
+        dimnames(v) == ("longitude", "latitude", "valid_time") ||
+            error("Unexpected dimension order $(dimnames(v)) in $nc_path")
+        dates = Date.(ds["valid_time"][:])
+
+        n = length(dates) * length(countries)
+        date_col = Vector{Date}(undef, 0); sizehint!(date_col, n)
+        iso_col = Vector{String}(undef, 0); sizehint!(iso_col, n)
+        mean_col = Vector{Float64}(undef, 0); sizehint!(mean_col, n)
+        min_col = Vector{Float64}(undef, 0); sizehint!(min_col, n)
+        max_col = Vector{Float64}(undef, 0); sizehint!(max_col, n)
+        cells_col = Vector{Int}(undef, 0); sizehint!(cells_col, n)
+
+        for (t, date) in enumerate(dates)
+            slice = v[:, :, t]
+            for (iso3, cw) in countries
+                stats = weighted_stats(slice, cw.cells, cw.weights)
+                stats === nothing && continue
+                push!(date_col, date)
+                push!(iso_col, iso3)
+                push!(mean_col, stats.mean)
+                push!(min_col, stats.min)
+                push!(max_col, stats.max)
+                push!(cells_col, stats.n)
+            end
+        end
+
+        return DataFrame(
+            date = date_col,
+            country_iso3 = iso_col,
+            variable = fill(variable, length(date_col)),
+            statistic = fill(statistic, length(date_col)),
+            value_mean = mean_col,
+            value_min = min_col,
+            value_max = max_col,
+            n_cells = cells_col,
+        )
+    end
+end
+
+function find_data_variable(ds::NCDatasets.Dataset)
+    for name in keys(ds)
+        v = ds[name]
+        if ndims(v) == 3 && issetequal(dimnames(v), ("longitude", "latitude", "valid_time"))
+            return name
+        end
+    end
+    error("No 3-D data variable with (longitude, latitude, valid_time) dimensions found")
+end
+
+function weighted_stats(slice, cells::Vector{CartesianIndex{2}}, weights::Vector{Float64})
+    wsum = 0.0
+    vsum = 0.0
+    vmin = Inf
+    vmax = -Inf
+    n = 0
+    @inbounds for (k, cell) in enumerate(cells)
+        val = slice[cell]
+        val === missing && continue
+        x = Float64(val)
+        w = weights[k]
+        vsum += w * x
+        wsum += w
+        vmin = min(vmin, x)
+        vmax = max(vmax, x)
+        n += 1
+    end
+    n == 0 && return nothing
+    return (mean = vsum / wsum, min = vmin, max = vmax, n = n)
+end
+
+end # module HazardDataFetch

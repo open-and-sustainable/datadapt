@@ -7,6 +7,7 @@ const DB_PATH_RAW = "DatAdapt-database/raw/DatAdapt_1980-2021.duckdb"
 const DB_PATH_PROCESSED = "DatAdapt-database/processed/DatAdapt_1980-2021.duckdb"
 
 # Include and use the renamed modules
+include("CDSAPI.jl")
 include("DatabaseAccess.jl")
 include("ExposureDataFetch.jl")
 include("DamageDataFetch.jl")
