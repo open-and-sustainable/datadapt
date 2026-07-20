@@ -51,17 +51,20 @@ struct TransientError <: Exception
 end
 Base.showerror(io::IO, e::TransientError) = print(io, e.msg)
 
-# Retry connection-level failures (stale pooled connections, SSL hiccups)
-# and TransientError; HTTP.jl does not retry POSTs on its own.
+# Retry connection-level failures (stale pooled connections, SSL hiccups,
+# DNS blips, timeouts) and TransientError; HTTP.jl does not retry POSTs
+# on its own. HTTP.Exceptions.HTTPError covers ConnectError, RequestError,
+# StatusError and TimeoutError -- these are siblings, not a hierarchy, so
+# the common supertype must be matched explicitly.
 function with_retries(f::Function, description::String; attempts::Int = 5, quiet::Bool = false)
     delay = 5.0
     for attempt in 1:attempts
         try
             return f()
         catch e
-            (e isa HTTP.RequestError || e isa Base.IOError || e isa TransientError) || rethrow()
+            (e isa HTTP.Exceptions.HTTPError || e isa Base.IOError || e isa TransientError) || rethrow()
             attempt == attempts && rethrow()
-            quiet || println("$description failed ($(sprint(showerror, e isa HTTP.RequestError ? e.error : e))). Retrying in $(round(Int, delay))s...")
+            quiet || println("$description failed ($(sprint(showerror, e))). Retrying in $(round(Int, delay))s...")
             sleep(delay)
             delay = min(delay * 2, 120.0)
         end
