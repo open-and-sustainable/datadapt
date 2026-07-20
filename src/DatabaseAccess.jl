@@ -96,6 +96,28 @@ function write_large_duckdb_table!(df::DataFrame, db_path::String, table_name::S
     DBInterface.close!(con)
 end
 
+# Record (or refresh) the period and provenance of a table in the
+# database's metadata table, so coverage lives in the data rather
+# than in file names
+function update_metadata!(db_path::String, table_name::String,
+                          start_year::Int, end_year::Int, source::String)
+    con = DuckDB.DB(db_path)
+    DBInterface.execute(con, """
+        CREATE TABLE IF NOT EXISTS metadata (
+            table_name STRING,
+            start_year INTEGER,
+            end_year INTEGER,
+            source STRING,
+            updated DATE
+        )""")
+    DBInterface.execute(con,
+        "DELETE FROM metadata WHERE table_name = $(escape_sql_string(table_name))")
+    DBInterface.execute(con,
+        "INSERT INTO metadata VALUES ($(escape_sql_string(table_name)), " *
+        "$start_year, $end_year, $(escape_sql_string(source)), CURRENT_DATE)")
+    DBInterface.close!(con)
+end
+
 function create_table_with_types!(df::DataFrame, con::DuckDB.DB, table_name::String)
     # Determine the column names and types
     column_names = names(df)
