@@ -2,9 +2,13 @@ module DatAdapt
 
 using DataFrames
 
+# Time period covered by the database
+const START_YEAR = 1980
+const END_YEAR = 2025
+
 # Define the database paths as constants
-const DB_PATH_RAW = "DatAdapt-database/raw/DatAdapt_1980-2021.duckdb"
-const DB_PATH_PROCESSED = "DatAdapt-database/processed/DatAdapt_1980-2021.duckdb"
+const DB_PATH_RAW = "DatAdapt-database/raw/DatAdapt_$(START_YEAR)-$(END_YEAR).duckdb"
+const DB_PATH_PROCESSED = "DatAdapt-database/processed/DatAdapt_$(START_YEAR)-$(END_YEAR).duckdb"
 
 # Include and use the renamed modules
 include("CDSAPI.jl")
@@ -21,17 +25,17 @@ using .HazardDataFetch
 function fetch_exposure_data()
     # wb_test_data = DataFetch.fetch_WB_test_data()
     # write_duckdb_table(wb_test_data, db_path, "wb_test_data")
-    E_data = ExposureDataFetch.fetch_exposure_data(1980, 2021)
+    E_data = ExposureDataFetch.fetch_exposure_data(START_YEAR, END_YEAR)
     DatabaseAccess.write_duckdb_table!(E_data, DB_PATH_RAW, "exposure")
 end
 
 function fetch_damage_data()
-    D_data = DamageDataFetch.fetch_damage_data(1980, 2021)
+    D_data = DamageDataFetch.fetch_damage_data(START_YEAR, END_YEAR)
     DatabaseAccess.write_duckdb_table!(D_data, DB_PATH_RAW, "damage")
 end
 
 function fetch_hazard_data()
-    H_data = HazardDataFetch.fetch_hazard_data(1980, 2021)
+    H_data = HazardDataFetch.fetch_hazard_data(START_YEAR, END_YEAR)
     DatabaseAccess.write_large_duckdb_table!(H_data, DB_PATH_RAW, "hazard")
 end
 
