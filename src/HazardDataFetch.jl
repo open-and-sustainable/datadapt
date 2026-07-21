@@ -13,6 +13,7 @@ using GeoInterface
 using LibGEOS
 
 using ..CDSAPI
+using ..CDSAPI: logmsg
 
 export fetch_hazard_data
 
@@ -65,7 +66,7 @@ function fetch_hazard_data(start_year::Int, end_year::Int)
     for year in start_year:end_year
         csv_path = joinpath(DATA_DIR, "country_daily_$year.csv")
         if isfile(csv_path)
-            println("Year $year already processed. Loading checkpoint.")
+            logmsg("Year $year already processed. Loading checkpoint.")
             push!(yearly, load_checkpoint(csv_path))
         else
             df = process_year(year)
@@ -94,7 +95,7 @@ function process_year(year::Int)
 
     for (i, (variable, statistic)) in enumerate(VARIABLE_STATS)
         if isfile(part_checkpoint_path(variable, statistic, year))
-            println("$variable / $statistic for $year already aggregated. Loading checkpoint.")
+            logmsg("$variable / $statistic for $year already aggregated. Loading checkpoint.")
             results[i] = load_checkpoint(part_checkpoint_path(variable, statistic, year))
         elseif isfile(nc_path(variable, statistic, year))
             results[i] = aggregate_part(variable, statistic, year)
@@ -105,12 +106,12 @@ function process_year(year::Int)
                 job_id = ""
             end
             if isempty(job_id)
-                println("Requesting $variable / $statistic for $year from the CDS...")
+                logmsg("Requesting $variable / $statistic for $year from the CDS...")
                 job_id = CDSAPI.submit_job(DATASET, cds_request(variable, statistic, year))
                 jobs[key] = job_id
                 save_job_registry(year, jobs)
             else
-                println("Re-attaching to CDS job $job_id for $variable / $statistic $year.")
+                logmsg("Re-attaching to CDS job $job_id for $variable / $statistic $year.")
             end
             push!(pending, i)
         end
@@ -125,7 +126,7 @@ function process_year(year::Int)
             job_id = jobs[key]
             status, message = CDSAPI.job_status(job_id)
             if status == "successful"
-                println("CDS job $job_id ($variable / $statistic $year) finished.")
+                logmsg("CDS job $job_id ($variable / $statistic $year) finished.")
                 archive_path = nc_path(variable, statistic, year) * ".download"
                 CDSAPI.download_result(job_id, archive_path)
                 extract_netcdf(archive_path, nc_path(variable, statistic, year))
@@ -168,7 +169,7 @@ end
 function aggregate_part(variable::String, statistic::String, year::Int)
     path = nc_path(variable, statistic, year)
     countries = get_country_assignment(path)
-    println("Aggregating $variable / $statistic for $year...")
+    logmsg("Aggregating $variable / $statistic for $year...")
     df = aggregate_country_daily(path, variable, statistic, countries)
     CSV.write(part_checkpoint_path(variable, statistic, year), df)
     rm(path)
@@ -246,7 +247,7 @@ function ensure_countries_shapefile()
 
     mkpath(dir)
     zip_path = joinpath(dir, "ne_10m_admin_0_countries.zip")
-    println("Downloading Natural Earth country boundaries...")
+    logmsg("Downloading Natural Earth country boundaries...")
     HTTP.download(COUNTRIES_URL, zip_path)
     archive = ZipFile.Reader(zip_path)
     for f in archive.files
@@ -279,7 +280,7 @@ function get_country_assignment(nc_path::String)
         return build_country_cells(df, lat)
     end
 
-    println("Assigning grid cells to countries (done once, may take a while)...")
+    logmsg("Assigning grid cells to countries (done once, may take a while)...")
     shp_path = ensure_countries_shapefile()
     features = load_country_features(shp_path)
 
@@ -303,7 +304,7 @@ function get_country_assignment(nc_path::String)
     end
     df = DataFrame(lon_idx = lon_idx, lat_idx = lat_idx, iso3 = iso3)
     CSV.write(cache_path, df)
-    println("Assigned $(nrow(df)) land cells to $(length(unique(df.iso3))) countries.")
+    logmsg("Assigned $(nrow(df)) land cells to $(length(unique(df.iso3))) countries.")
     return build_country_cells(df, lat)
 end
 

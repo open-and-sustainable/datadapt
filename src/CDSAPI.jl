@@ -7,6 +7,12 @@ export retrieve
 
 const DEFAULT_URL = "https://cds.climate.copernicus.eu/api"
 
+# println alone can sit unflushed in a redirected file's buffer for a
+# long time when print volume is low relative to the buffer size, as
+# happens across a multi-day CDS queue wait; flush every message so
+# progress is actually visible in log files.
+logmsg(msg) = (println(msg); flush(stdout))
+
 struct Client
     url::String
     key::String
@@ -64,7 +70,7 @@ function with_retries(f::Function, description::String; attempts::Int = 5, quiet
         catch e
             (e isa HTTP.Exceptions.HTTPError || e isa Base.IOError || e isa TransientError) || rethrow()
             attempt == attempts && rethrow()
-            quiet || println("$description failed ($(sprint(showerror, e))). Retrying in $(round(Int, delay))s...")
+            quiet || logmsg("$description failed ($(sprint(showerror, e))). Retrying in $(round(Int, delay))s...")
             sleep(delay)
             delay = min(delay * 2, 120.0)
         end
@@ -91,7 +97,7 @@ Equivalent to the Python cdsapi `Client().retrieve(...).download(...)`.
 function retrieve(dataset::String, request::Dict, target::String; quiet::Bool = false)
     client = Client()
     job_id = submit_job(client, dataset, request)
-    quiet || println("CDS request submitted (job $job_id). Waiting...")
+    quiet || logmsg("CDS request submitted (job $job_id). Waiting...")
     wait_for_job(client, job_id; quiet = quiet)
     return download_result(client, job_id, target; quiet = quiet)
 end
@@ -147,7 +153,7 @@ function wait_for_job(client::Client, job_id::String; quiet::Bool = false)
     while true
         status, message = job_status(client, job_id)
         if status != last_status
-            quiet || println("CDS job $job_id: $status")
+            quiet || logmsg("CDS job $job_id: $status")
             last_status = status
         end
         status == "successful" && return
@@ -169,7 +175,7 @@ download_result(job_id::String, target::String; quiet::Bool = false) =
 
 function download_result(client::Client, job_id::String, target::String; quiet::Bool = false)
     href = result_href(client, job_id)
-    quiet || println("Downloading result to $target...")
+    quiet || logmsg("Downloading result to $target...")
     with_retries("Download of CDS job $job_id"; quiet = quiet) do
         HTTP.download(href, target; update_period = Inf)
     end
