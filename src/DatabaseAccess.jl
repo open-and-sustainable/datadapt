@@ -5,7 +5,20 @@ using DataFrames
 using Dates
 using CSV
 
-export write_duckdb_table, write_large_duckdb_table, executePRQL
+export write_duckdb_table, write_large_duckdb_table, executePRQL, with_connection
+
+# Open db_path, run f(con), and guarantee the connection is closed
+# afterwards. Writes that must land in the same durability unit (e.g.
+# a table write followed by its metadata update) should share the
+# connection passed into f rather than opening the file again.
+function with_connection(f::Function, db_path::String)
+    con = DuckDB.DB(db_path)
+    try
+        return f(con)
+    finally
+        DBInterface.close!(con)
+    end
+end
 
 function escape_sql_string(value::String)::String
     # Manually escape single quotes by doubling them
@@ -74,34 +87,24 @@ function create_and_load_table_directly!(df::DataFrame, con::DuckDB.DB, table_na
 
 end
 
-function write_duckdb_table!(df::DataFrame, db_path::String, table_name::String)
-    # Create or connect to the DuckDB database
-    con = DuckDB.DB(db_path)
-    
-    # Create the table with types and load data
+function write_duckdb_table!(df::DataFrame, con::DuckDB.DB, table_name::String)
     create_and_load_table_directly!(df, con, table_name)
-    
-    # Close the connection
-    DBInterface.close!(con)
 end
 
-function write_large_duckdb_table!(df::DataFrame, db_path::String, table_name::String)
-    # Create or connect to the DuckDB database
-    con = DuckDB.DB(db_path)
-    
-    # Create the table with types and load data
+function write_large_duckdb_table!(df::DataFrame, con::DuckDB.DB, table_name::String)
     create_and_load_table_throughCSV!(df, con, table_name)
-    
-    # Close the connection
-    DBInterface.close!(con)
 end
 
 # Record (or refresh) the period and provenance of a table in the
 # database's metadata table, so coverage lives in the data rather
-# than in file names
-function update_metadata!(db_path::String, table_name::String,
+# than in file names. Must run on the same connection used to write
+# the table: reopening a DuckDB file via a second DuckDB.DB(path) call
+# within one process is not reliably durable once the first
+# connection's local variable goes out of scope (its finalizer can
+# run at an unpredictable time relative to the second connection),
+# silently losing writes made through the second connection.
+function update_metadata!(con::DuckDB.DB, table_name::String,
                           start_year::Int, end_year::Int, source::String)
-    con = DuckDB.DB(db_path)
     DBInterface.execute(con, """
         CREATE TABLE IF NOT EXISTS metadata (
             table_name STRING,
@@ -115,7 +118,6 @@ function update_metadata!(db_path::String, table_name::String,
     DBInterface.execute(con,
         "INSERT INTO metadata VALUES ($(escape_sql_string(table_name)), " *
         "$start_year, $end_year, $(escape_sql_string(source)), CURRENT_DATE)")
-    DBInterface.close!(con)
 end
 
 function create_table_with_types!(df::DataFrame, con::DuckDB.DB, table_name::String)
