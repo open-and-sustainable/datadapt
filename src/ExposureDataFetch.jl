@@ -62,19 +62,19 @@ function fetch_exposure_data(start_year::Int, end_year::Int)
     return combined_df
 end
 
-function fetch_with_retries(url::String; retries::Int=5, delay::Int=5)
-    attempt = 0
-    while attempt < retries
+function fetch_with_retries(url::String; retries::Int=8, delay::Float64=5.0)
+    for attempt in 1:retries
         try
-            response = HTTP.get(url)
-            return response
+            response = HTTP.get(url; status_exception = false, retry = false)
+            (response.status == 200 || attempt == retries) && return response
+            println("Attempt $attempt got HTTP $(response.status). Retrying in $(round(Int, delay))s...")
         catch e
-            println("Attempt $(attempt + 1) failed: $e")
-            sleep(delay)  # Wait for some time before retrying
-            attempt += 1
+            attempt == retries && rethrow()
+            println("Attempt $attempt failed ($e). Retrying in $(round(Int, delay))s...")
         end
+        sleep(delay)
+        delay = min(delay * 2, 60.0)
     end
-    error("All retries failed for URL: $url")
 end
 
 
