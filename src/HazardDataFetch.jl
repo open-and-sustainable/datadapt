@@ -45,37 +45,42 @@ const VARIABLE_STATS = [
 ]
 
 """
-    fetch_hazard_data(start_year, end_year) -> DataFrame
+    fetch_hazard_data(sink, start_year, end_year) -> nothing
 
 Download ERA5 post-processed daily statistics from the CDS and aggregate them
-to country-day level. Returns a long-format DataFrame with columns:
-date, country_iso3, variable, statistic, value_mean (area-weighted),
-value_min, value_max, n_cells.
+to country-day level. Each completed year is passed to `sink(year, df)` as a
+long-format DataFrame with columns: date, country_iso3, variable, statistic,
+value_mean (area-weighted), value_min, value_max, n_cells.
+
+Years are handed over one at a time and not retained afterwards, so peak
+memory stays at roughly one year (~1M rows) no matter how long the requested
+period is. `sink` is expected to be idempotent per year, since a resumed run
+replays years it already handed over.
 
 Progress is checkpointed per year in `DATA_DIR/country_daily_<year>.csv`;
-already-processed years are skipped, so interrupted runs can be resumed.
+already-processed years are reloaded from disk rather than re-downloaded, so
+interrupted runs can be resumed.
 """
-function fetch_hazard_data(start_year::Int, end_year::Int)
+function fetch_hazard_data(sink::Function, start_year::Int, end_year::Int)
     if start_year < 1940
         @warn "ERA5 starts in 1940; adjusting start year from $start_year to 1940"
         start_year = 1940
     end
     mkpath(DATA_DIR)
 
-    yearly = DataFrame[]
     for year in start_year:end_year
         csv_path = joinpath(DATA_DIR, "country_daily_$year.csv")
         if isfile(csv_path)
             logmsg("Year $year already processed. Loading checkpoint.")
-            push!(yearly, load_checkpoint(csv_path))
+            df = load_checkpoint(csv_path)
         else
             df = process_year(year)
             CSV.write(csv_path, df)
             cleanup_parts(year)
-            push!(yearly, df)
         end
+        sink(year, df)
     end
-    return vcat(yearly...)
+    return nothing
 end
 
 function load_checkpoint(csv_path::String)

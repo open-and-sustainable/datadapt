@@ -91,6 +91,61 @@ function write_duckdb_table!(df::DataFrame, con::DuckDB.DB, table_name::String)
     create_and_load_table_directly!(df, con, table_name)
 end
 
+function table_exists(con::DuckDB.DB, table_name::String)
+    rows = DataFrame(DBInterface.execute(con,
+        "SELECT count(*) AS n FROM duckdb_tables() " *
+        "WHERE table_name = $(escape_sql_string(table_name))"))
+    return rows[1, :n] > 0
+end
+
+"""
+    replace_year_in_duckdb_table!(df, con, table_name, year; date_column="date")
+
+Load one year of `df` into `table_name`, creating the table from `df`'s schema
+on first use. Rows already present for `year` are deleted first, which makes
+the load idempotent: a resumed multi-year fetch re-writes years it had already
+written instead of duplicating them.
+"""
+function replace_year_in_duckdb_table!(df::DataFrame, con::DuckDB.DB,
+                                       table_name::String, year::Int;
+                                       date_column::String = "date")
+    if table_exists(con, table_name)
+        DBInterface.execute(con, "DELETE FROM $table_name " *
+            "WHERE EXTRACT(YEAR FROM \"$date_column\") = $year")
+    else
+        create_table_with_types!(df, con, table_name)
+    end
+
+    # COPY matches columns positionally; the table was created from this same
+    # DataFrame's schema, so CSV.write's column order lines up.
+    temp_csv_path = "DatAdapt-database/raw/temp_$(table_name)_$(year).csv"
+    CSV.write(temp_csv_path, df)
+    try
+        DBInterface.execute(con,
+            "COPY $table_name FROM '$temp_csv_path' (FORMAT CSV, HEADER TRUE)")
+    finally
+        rm(temp_csv_path; force = true)
+    end
+end
+
+"""
+    table_year_range(con, table_name; date_column="date") -> (first, last) or nothing
+
+Year span actually stored in `table_name`, read back from the data. Lets an
+incrementally loaded table record the coverage it really has, rather than the
+period a run intended to cover but may not have finished.
+"""
+function table_year_range(con::DuckDB.DB, table_name::String;
+                          date_column::String = "date")
+    table_exists(con, table_name) || return nothing
+    rows = DataFrame(DBInterface.execute(con,
+        "SELECT min(EXTRACT(YEAR FROM \"$date_column\"))::INTEGER AS first_year, " *
+        "max(EXTRACT(YEAR FROM \"$date_column\"))::INTEGER AS last_year " *
+        "FROM $table_name"))
+    (nrow(rows) == 0 || ismissing(rows[1, :first_year])) && return nothing
+    return (Int(rows[1, :first_year]), Int(rows[1, :last_year]))
+end
+
 function write_large_duckdb_table!(df::DataFrame, con::DuckDB.DB, table_name::String)
     create_and_load_table_throughCSV!(df, con, table_name)
 end

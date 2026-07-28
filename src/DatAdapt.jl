@@ -20,6 +20,7 @@ include("ExposureDataFetch.jl")
 include("DamageDataFetch.jl")
 include("HazardDataFetch.jl")
 
+using .CDSAPI: logmsg
 using .DatabaseAccess
 using .ExposureDataFetch
 using .DamageDataFetch
@@ -43,22 +44,34 @@ function fetch_damage_data()
     end
 end
 
+const HAZARD_SOURCE = "ERA5 post-processed daily statistics, Copernicus CDS"
+
 function fetch_hazard_data()
-    H_data = HazardDataFetch.fetch_hazard_data(START_YEAR, END_YEAR)
-    DatabaseAccess.with_connection(DB_PATH_RAW) do con
-        DatabaseAccess.write_large_duckdb_table!(H_data, con, "hazard")
-        DatabaseAccess.update_metadata!(con, "hazard", START_YEAR, END_YEAR,
-            "ERA5 post-processed daily statistics, Copernicus CDS")
-    end
+    load_hazard_years("hazard", START_YEAR, END_YEAR)
 end
 
 function fetch_baseline_hazard_data()
-    H_BL_data = HazardDataFetch.fetch_hazard_data(BASELINE_START_YEAR, BASELINE_END_YEAR)
+    load_hazard_years("hazard_baseline", BASELINE_START_YEAR, BASELINE_END_YEAR)
+end
+
+# Hazard spans decades of daily country-level rows, far more than is
+# comfortable to hold in memory at once, so each year is written to the
+# database as it completes and then released. The connection stays open for
+# the whole run: DuckDB autocommits each statement, so a year is durable once
+# written, while reopening the file mid-process is not reliably durable (see
+# update_metadata!).
+function load_hazard_years(table::String, start_year::Int, end_year::Int)
     DatabaseAccess.with_connection(DB_PATH_RAW) do con
-        DatabaseAccess.write_large_duckdb_table!(H_BL_data, con, "hazard_baseline")
-        DatabaseAccess.update_metadata!(con, "hazard_baseline",
-            BASELINE_START_YEAR, BASELINE_END_YEAR,
-            "ERA5 post-processed daily statistics, Copernicus CDS")
+        HazardDataFetch.fetch_hazard_data(start_year, end_year) do year, df
+            DatabaseAccess.replace_year_in_duckdb_table!(df, con, table, year)
+            covered = DatabaseAccess.table_year_range(con, table)
+            if covered !== nothing
+                DatabaseAccess.update_metadata!(con, table, covered[1], covered[2],
+                    HAZARD_SOURCE)
+            end
+            logmsg("Wrote $year to table $table ($(nrow(df)) rows); " *
+                   "coverage now $(covered === nothing ? "unknown" : "$(covered[1])-$(covered[2])").")
+        end
     end
 end
 
