@@ -5,7 +5,20 @@ using DataFrames
 using Dates
 using CSV
 
-export write_duckdb_table, write_large_duckdb_table, executePRQL
+export write_duckdb_table, write_large_duckdb_table, executePRQL, with_connection
+
+# Open db_path, run f(con), and guarantee the connection is closed
+# afterwards. Writes that must land in the same durability unit (e.g.
+# a table write followed by its metadata update) should share the
+# connection passed into f rather than opening the file again.
+function with_connection(f::Function, db_path::String)
+    con = DuckDB.DB(db_path)
+    try
+        return f(con)
+    finally
+        DBInterface.close!(con)
+    end
+end
 
 function escape_sql_string(value::String)::String
     # Manually escape single quotes by doubling them
@@ -74,26 +87,92 @@ function create_and_load_table_directly!(df::DataFrame, con::DuckDB.DB, table_na
 
 end
 
-function write_duckdb_table!(df::DataFrame, db_path::String, table_name::String)
-    # Create or connect to the DuckDB database
-    con = DuckDB.DB(db_path)
-    
-    # Create the table with types and load data
+function write_duckdb_table!(df::DataFrame, con::DuckDB.DB, table_name::String)
     create_and_load_table_directly!(df, con, table_name)
-    
-    # Close the connection
-    DBInterface.close!(con)
 end
 
-function write_large_duckdb_table!(df::DataFrame, db_path::String, table_name::String)
-    # Create or connect to the DuckDB database
-    con = DuckDB.DB(db_path)
-    
-    # Create the table with types and load data
+function table_exists(con::DuckDB.DB, table_name::String)
+    rows = DataFrame(DBInterface.execute(con,
+        "SELECT count(*) AS n FROM duckdb_tables() " *
+        "WHERE table_name = $(escape_sql_string(table_name))"))
+    return rows[1, :n] > 0
+end
+
+"""
+    replace_year_in_duckdb_table!(df, con, table_name, year; date_column="date")
+
+Load one year of `df` into `table_name`, creating the table from `df`'s schema
+on first use. Rows already present for `year` are deleted first, which makes
+the load idempotent: a resumed multi-year fetch re-writes years it had already
+written instead of duplicating them.
+"""
+function replace_year_in_duckdb_table!(df::DataFrame, con::DuckDB.DB,
+                                       table_name::String, year::Int;
+                                       date_column::String = "date")
+    if table_exists(con, table_name)
+        DBInterface.execute(con, "DELETE FROM $table_name " *
+            "WHERE EXTRACT(YEAR FROM \"$date_column\") = $year")
+    else
+        create_table_with_types!(df, con, table_name)
+    end
+
+    # COPY matches columns positionally; the table was created from this same
+    # DataFrame's schema, so CSV.write's column order lines up.
+    temp_csv_path = "DatAdapt-database/raw/temp_$(table_name)_$(year).csv"
+    CSV.write(temp_csv_path, df)
+    try
+        DBInterface.execute(con,
+            "COPY $table_name FROM '$temp_csv_path' (FORMAT CSV, HEADER TRUE)")
+    finally
+        rm(temp_csv_path; force = true)
+    end
+end
+
+"""
+    table_year_range(con, table_name; date_column="date") -> (first, last) or nothing
+
+Year span actually stored in `table_name`, read back from the data. Lets an
+incrementally loaded table record the coverage it really has, rather than the
+period a run intended to cover but may not have finished.
+"""
+function table_year_range(con::DuckDB.DB, table_name::String;
+                          date_column::String = "date")
+    table_exists(con, table_name) || return nothing
+    rows = DataFrame(DBInterface.execute(con,
+        "SELECT min(EXTRACT(YEAR FROM \"$date_column\"))::INTEGER AS first_year, " *
+        "max(EXTRACT(YEAR FROM \"$date_column\"))::INTEGER AS last_year " *
+        "FROM $table_name"))
+    (nrow(rows) == 0 || ismissing(rows[1, :first_year])) && return nothing
+    return (Int(rows[1, :first_year]), Int(rows[1, :last_year]))
+end
+
+function write_large_duckdb_table!(df::DataFrame, con::DuckDB.DB, table_name::String)
     create_and_load_table_throughCSV!(df, con, table_name)
-    
-    # Close the connection
-    DBInterface.close!(con)
+end
+
+# Record (or refresh) the period and provenance of a table in the
+# database's metadata table, so coverage lives in the data rather
+# than in file names. Must run on the same connection used to write
+# the table: reopening a DuckDB file via a second DuckDB.DB(path) call
+# within one process is not reliably durable once the first
+# connection's local variable goes out of scope (its finalizer can
+# run at an unpredictable time relative to the second connection),
+# silently losing writes made through the second connection.
+function update_metadata!(con::DuckDB.DB, table_name::String,
+                          start_year::Int, end_year::Int, source::String)
+    DBInterface.execute(con, """
+        CREATE TABLE IF NOT EXISTS metadata (
+            table_name STRING,
+            start_year INTEGER,
+            end_year INTEGER,
+            source STRING,
+            updated DATE
+        )""")
+    DBInterface.execute(con,
+        "DELETE FROM metadata WHERE table_name = $(escape_sql_string(table_name))")
+    DBInterface.execute(con,
+        "INSERT INTO metadata VALUES ($(escape_sql_string(table_name)), " *
+        "$start_year, $end_year, $(escape_sql_string(source)), CURRENT_DATE)")
 end
 
 function create_table_with_types!(df::DataFrame, con::DuckDB.DB, table_name::String)
