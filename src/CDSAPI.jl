@@ -50,6 +50,14 @@ end
 headers(client::Client) = ["PRIVATE-TOKEN" => client.key,
                            "Content-Type" => "application/json"]
 
+# HTTP.jl exceptions embed the request that failed, headers included, so
+# rendering one verbatim writes the CDS personal access token into the log.
+# Everything that turns an exception into text goes through here.
+redact(msg::AbstractString) =
+    replace(msg, r"(PRIVATE-TOKEN:\s*)\S+"i => s"\1<redacted>")
+
+render_error(e) = redact(sprint(showerror, e))
+
 # Server-side hiccups (HTTP 5xx) that are worth retrying, unlike
 # genuine API rejections (4xx) which fail fast
 struct TransientError <: Exception
@@ -69,8 +77,12 @@ function with_retries(f::Function, description::String; attempts::Int = 5, quiet
             return f()
         catch e
             (e isa HTTP.Exceptions.HTTPError || e isa Base.IOError || e isa TransientError) || rethrow()
-            attempt == attempts && rethrow()
-            quiet || logmsg("$description failed ($(sprint(showerror, e))). Retrying in $(round(Int, delay))s...")
+            # Rethrowing would let Julia's top-level handler print the
+            # request, and with it the token, so surface a redacted copy
+            # instead. The original type is lost; no caller dispatches on it.
+            attempt == attempts &&
+                error("$description failed after $attempts attempts: $(render_error(e))")
+            quiet || logmsg("$description failed ($(render_error(e))). Retrying in $(round(Int, delay))s...")
             sleep(delay)
             delay = min(delay * 2, 120.0)
         end
