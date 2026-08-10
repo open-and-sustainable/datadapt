@@ -19,6 +19,13 @@ export fetch_hazard_data
 
 const DATASET = "derived-era5-single-levels-daily-statistics"
 const DATA_DIR = "DatAdapt-database/raw/era5_daily"
+
+# Retained gridded downloads live apart from the country-level checkpoints:
+# they are the original source data, ~731 MB per variable-year, and 644 of
+# them in one flat directory would be unusable. One directory per year holds
+# that year's 14 variable-statistics, matching the order the fetch fills them
+# in and keeping a year's ~10 GB together for archiving or pruning.
+const GRID_DIR = "DatAdapt-database/raw/era5_grid"
 const COUNTRIES_URL = "https://naciscdn.org/naturalearth/10m/cultural/ne_10m_admin_0_countries.zip"
 
 # (variable, daily_statistic) pairs downloaded from the CDS.
@@ -133,6 +140,7 @@ function process_year(year::Int)
             if status == "successful"
                 logmsg("CDS job $job_id ($variable / $statistic $year) finished.")
                 archive_path = nc_path(variable, statistic, year) * ".download"
+                mkpath(dirname(archive_path))
                 CDSAPI.download_result(job_id, archive_path)
                 extract_netcdf(archive_path, nc_path(variable, statistic, year))
                 results[i] = aggregate_part(variable, statistic, year)
@@ -177,7 +185,12 @@ function aggregate_part(variable::String, statistic::String, year::Int)
     logmsg("Aggregating $variable / $statistic for $year...")
     df = aggregate_country_daily(path, variable, statistic, countries)
     CSV.write(part_checkpoint_path(variable, statistic, year), df)
-    rm(path)
+    # The gridded file is kept. Aggregating to countries throws away the
+    # spatial detail any later subnational analysis would need, and the CDS
+    # charges a request by variable-days regardless of the area asked for:
+    # re-fetching one country costs the same 644 jobs, and the same weeks of
+    # queue, as re-fetching the world. Storage is the cheaper side of that
+    # trade at ~731 MB per variable-year.
     return df
 end
 
@@ -191,7 +204,8 @@ function job_is_alive(job_id::String)
 end
 
 nc_path(variable, statistic, year) =
-    joinpath(DATA_DIR, "era5_$(variable)_$(statistic)_$year.nc")
+    joinpath(GRID_DIR, string(year),
+             "era5_$(variable)_$(statistic)_$year.nc")
 
 part_checkpoint_path(variable, statistic, year) =
     joinpath(DATA_DIR, "part_$(variable)_$(statistic)_$year.csv")
