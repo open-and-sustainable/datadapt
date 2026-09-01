@@ -11,6 +11,11 @@ const BASELINE_END_YEAR = 1979
 
 # Define the database paths as constants
 const DB_PATH_RAW = "DatAdapt-database/raw/DatAdapt.duckdb"
+# The baseline period is written to its own raw database whose name differs
+# from the main one only by the period suffix. The non-baseline extraction
+# keeps using DatAdapt.duckdb unchanged, and the two periods can be downloaded
+# in parallel without contending for the same DuckDB file.
+const DB_PATH_RAW_BASELINE = "DatAdapt-database/raw/DatAdapt_$(BASELINE_START_YEAR)-$(BASELINE_END_YEAR).duckdb"
 const DB_PATH_PROCESSED = "DatAdapt-database/processed/DatAdapt.duckdb"
 
 # Include and use the renamed modules
@@ -51,7 +56,8 @@ function fetch_hazard_data()
 end
 
 function fetch_baseline_hazard_data()
-    load_hazard_years("hazard_baseline", BASELINE_START_YEAR, BASELINE_END_YEAR)
+    load_hazard_years("hazard_baseline", BASELINE_START_YEAR, BASELINE_END_YEAR,
+        DB_PATH_RAW_BASELINE)
 end
 
 # Hazard spans decades of daily country-level rows, far more than is
@@ -60,8 +66,9 @@ end
 # the whole run: DuckDB autocommits each statement, so a year is durable once
 # written, while reopening the file mid-process is not reliably durable (see
 # update_metadata!).
-function load_hazard_years(table::String, start_year::Int, end_year::Int)
-    DatabaseAccess.with_connection(DB_PATH_RAW) do con
+function load_hazard_years(table::String, start_year::Int, end_year::Int,
+        db_path::String=DB_PATH_RAW)
+    DatabaseAccess.with_connection(db_path) do con
         HazardDataFetch.fetch_hazard_data(start_year, end_year) do year, df
             DatabaseAccess.replace_year_in_duckdb_table!(df, con, table, year)
             covered = DatabaseAccess.table_year_range(con, table)
