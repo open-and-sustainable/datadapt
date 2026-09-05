@@ -51,6 +51,25 @@ const VARIABLE_STATS = [
     ("volumetric_soil_water_layer_3", "daily_mean"),
 ]
 
+# How many CDS jobs to keep in flight at once. The CDS caps queued requests per
+# account and that cap varies with load, so the default (14 = a whole year's
+# worth) suits a generous account, while a constrained one can lower it via the
+# DATADAPT_MAX_IN_FLIGHT environment variable. Either way the cap self-tunes
+# down whenever a submission is "rejected". Read at runtime (not a const) so the
+# env var takes effect without recompiling. Throughput is unaffected — the CDS
+# runs only one of a user's jobs at a time.
+function max_in_flight()
+    n = tryparse(Int, get(ENV, "DATADAPT_MAX_IN_FLIGHT", ""))
+    return (n === nothing || n < 1) ? 14 : n
+end
+const REJECT_BACKOFF_START = 120.0
+const REJECT_BACKOFF_MAX = 1800.0
+# CDS jobs occasionally come back "failed"/"dismissed" for transient reasons;
+# resubmit a piece up to MAX_ATTEMPTS times (with a short pause) before giving
+# up, so one hiccup doesn't abort a multi-day run.
+const MAX_ATTEMPTS = 3
+const FAILED_RETRY_DELAY = 60.0
+
 """
     fetch_hazard_data(sink, start_year, end_year) -> nothing
 
@@ -96,14 +115,18 @@ function load_checkpoint(csv_path::String)
                      :variable => String, :statistic => String))
 end
 
-# Each (variable, statistic) is checkpointed separately so an interrupted
-# run only loses the piece it was working on. All CDS jobs for the year
-# are submitted up front so they queue on the CDS in parallel; results
-# are downloaded and aggregated as each job finishes.
+# Each (variable, statistic) is checkpointed separately so an interrupted run
+# only loses the piece it was working on. The CDS is kept topped up to `cap`
+# jobs in flight (starting at MAX_IN_FLIGHT): the moment a job is seen finished
+# its slot is refilled *before* the slow local download+aggregate, so the CDS
+# queue never idles waiting on us. A "rejected" status means the per-account
+# queued limit was hit; it is transient, so the variable/statistic is requeued,
+# the cap is lowered by one, and new submissions pause for a growing backoff.
 function process_year(year::Int)
     results = Vector{Union{Nothing, DataFrame}}(nothing, length(VARIABLE_STATS))
     jobs = load_job_registry(year)
-    pending = Int[]
+    todo = Int[]
+    in_flight = Dict{Int, String}()
 
     for (i, (variable, statistic)) in enumerate(VARIABLE_STATS)
         if isfile(part_checkpoint_path(variable, statistic, year))
@@ -114,51 +137,114 @@ function process_year(year::Int)
         else
             key = registry_key(variable, statistic)
             job_id = get(jobs, key, "")
-            if !isempty(job_id) && !job_is_alive(job_id)
-                job_id = ""
+            if !isempty(job_id) && job_is_alive(job_id)
+                logmsg("Re-attaching to CDS job $job_id for $variable / $statistic $year.")
+                in_flight[i] = job_id
+            else
+                if !isempty(job_id)
+                    delete!(jobs, key)
+                    save_job_registry(year, jobs)
+                end
+                push!(todo, i)
             end
-            if isempty(job_id)
+        end
+    end
+
+    cap = max_in_flight()
+    poll_delay = 10.0
+    reject_backoff = REJECT_BACKOFF_START
+    hold_submits_until = 0.0
+    attempts = Dict{Int, Int}()
+
+    # Submit queued variable/statistics until the CDS holds `cap` jobs, unless a
+    # recent rejection asked us to hold off while its queue drains. Called at
+    # the top of the loop and again as soon as jobs finish, so freed slots are
+    # resubmitted before the download+aggregate rather than after it.
+    refill!() = begin
+        if time() >= hold_submits_until
+            while !isempty(todo) && length(in_flight) < cap
+                i = popfirst!(todo)
+                variable, statistic = VARIABLE_STATS[i]
+                key = registry_key(variable, statistic)
                 logmsg("Requesting $variable / $statistic for $year from the CDS...")
                 job_id = CDSAPI.submit_job(DATASET, cds_request(variable, statistic, year))
                 jobs[key] = job_id
                 save_job_registry(year, jobs)
-            else
-                logmsg("Re-attaching to CDS job $job_id for $variable / $statistic $year.")
+                in_flight[i] = job_id
             end
-            push!(pending, i)
         end
     end
 
-    delay = 10.0
-    while !isempty(pending)
+    while !isempty(todo) || !isempty(in_flight)
+        refill!()
+
+        # Poll every in-flight job; collect the finished ones but defer their
+        # download/aggregate so we can refill the freed slots first.
         progressed = false
-        for i in copy(pending)
+        ready = Tuple{Int, String}[]
+        for (i, job_id) in collect(in_flight)
             variable, statistic = VARIABLE_STATS[i]
             key = registry_key(variable, statistic)
-            job_id = jobs[key]
             status, message = CDSAPI.job_status(job_id)
             if status == "successful"
-                logmsg("CDS job $job_id ($variable / $statistic $year) finished.")
-                archive_path = nc_path(variable, statistic, year) * ".download"
-                mkpath(dirname(archive_path))
-                CDSAPI.download_result(job_id, archive_path)
-                extract_netcdf(archive_path, nc_path(variable, statistic, year))
-                results[i] = aggregate_part(variable, statistic, year)
+                delete!(in_flight, i)
+                push!(ready, (i, job_id))
+            elseif status == "rejected"
+                # Per-account queued limit hit; not a real failure. Requeue,
+                # lower the cap by one, and pause submissions for a growing
+                # backoff so the queue can drain.
                 delete!(jobs, key)
                 save_job_registry(year, jobs)
-                filter!(!=(i), pending)
-                progressed = true
-                delay = 10.0
+                delete!(in_flight, i)
+                push!(todo, i)
+                cap = max(1, cap - 1)
+                hold_submits_until = time() + reject_backoff
+                logmsg("CDS job $job_id ($variable / $statistic $year) rejected " *
+                       "(queue limit); cap now $cap, retrying in $(round(Int, reject_backoff))s.")
+                reject_backoff = min(reject_backoff * 2, REJECT_BACKOFF_MAX)
             elseif status in ("failed", "dismissed")
+                # Usually a transient CDS-side failure. Resubmit the piece a
+                # few times before giving up, so one hiccup doesn't abort the
+                # whole run; a persistent failure still surfaces after the cap.
                 delete!(jobs, key)
                 save_job_registry(year, jobs)
-                error("CDS job $job_id for $variable / $statistic $year $status: " *
-                      (isempty(message) ? "no error message provided" : message))
+                delete!(in_flight, i)
+                attempts[i] = get(attempts, i, 0) + 1
+                if attempts[i] >= MAX_ATTEMPTS
+                    error("CDS job $job_id for $variable / $statistic $year $status " *
+                          "after $(attempts[i]) attempts: " *
+                          (isempty(message) ? "no error message provided" : message))
+                end
+                push!(todo, i)
+                hold_submits_until = max(hold_submits_until, time() + FAILED_RETRY_DELAY)
+                logmsg("CDS job $job_id ($variable / $statistic $year) $status " *
+                       "(attempt $(attempts[i])/$MAX_ATTEMPTS); resubmitting in " *
+                       "$(round(Int, FAILED_RETRY_DELAY))s.")
             end
         end
-        if !isempty(pending) && !progressed
-            sleep(delay)
-            delay = min(delay * 1.5, 120.0)
+
+        # Refill the freed slots now, before the slow local work below.
+        isempty(ready) || refill!()
+
+        for (i, job_id) in ready
+            variable, statistic = VARIABLE_STATS[i]
+            key = registry_key(variable, statistic)
+            logmsg("CDS job $job_id ($variable / $statistic $year) finished.")
+            archive_path = nc_path(variable, statistic, year) * ".download"
+            mkpath(dirname(archive_path))
+            CDSAPI.download_result(job_id, archive_path)
+            extract_netcdf(archive_path, nc_path(variable, statistic, year))
+            results[i] = aggregate_part(variable, statistic, year)
+            delete!(jobs, key)
+            save_job_registry(year, jobs)
+            progressed = true
+            poll_delay = 10.0
+            reject_backoff = REJECT_BACKOFF_START
+        end
+
+        if (!isempty(todo) || !isempty(in_flight)) && !progressed
+            sleep(poll_delay)
+            poll_delay = min(poll_delay * 1.5, 120.0)
         end
     end
     return vcat(results...)
