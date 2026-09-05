@@ -1,0 +1,38 @@
+[Unit]
+# Template unit: one instance per fetch, named after the log it writes.
+#   systemctl --user enable --now datadapt-fetch@hazard
+#   systemctl --user enable --now datadapt-fetch@hazard_baseline
+# The two instances write to different tables in different DuckDB files, so
+# they can run at once on the same machine without contending for a lock.
+Description=DatAdapt %i fetch (ERA5 daily statistics from the CDS)
+Documentation=https://github.com/open-and-sustainable/datadapt
+# A full period takes months to download. Systemd gives up after 5 restarts in
+# 10s by default, which a run this long must never do.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# Machine-specific: the checkout to run from. Edit if the repository lives
+# elsewhere; %h expands to the home directory of the user running the service.
+WorkingDirectory=%h/data/code/open-and-sustainable/datadapt
+# julia is not on systemd's default PATH, so it needs an absolute path.
+ExecStart=%h/.juliaup/bin/julia --project=. -e 'push!(LOAD_PATH, "src"); using DatAdapt; "%i" == "hazard_baseline" ? DatAdapt.fetch_baseline_hazard_data() : DatAdapt.fetch_hazard_data()'
+
+# Optional per-instance settings, e.g. DATADAPT_MAX_IN_FLIGHT for an account
+# with a smaller CDS queue allowance. The leading "-" means the file may be
+# absent. Keeps account-specific tuning out of the repository.
+EnvironmentFile=-%h/.config/datadapt/%i.env
+
+# The fetch is resumable: it reloads year and per-variable checkpoints and
+# re-attaches to live CDS jobs by id, so a restart costs replay time, never
+# data or queue position. Some CDS errors still abort the process, and a run
+# spanning months will meet them, so restarting is the recovery path rather
+# than a workaround for a bug.
+Restart=always
+RestartSec=60
+
+StandardOutput=append:%h/data/code/open-and-sustainable/datadapt/%i.log
+StandardError=append:%h/data/code/open-and-sustainable/datadapt/%i.log
+
+[Install]
+WantedBy=default.target
