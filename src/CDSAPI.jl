@@ -124,12 +124,19 @@ submit_job(dataset::String, request::Dict) = submit_job(Client(), dataset, reque
 
 function submit_job(client::Client, dataset::String, request::Dict)
     response = with_retries("CDS request submission") do
-        HTTP.post(
+        r = HTTP.post(
             "$(client.url)/retrieve/v1/processes/$dataset/execution",
             headers(client),
             JSON.json(Dict("inputs" => request));
             status_exception = false,
         )
+        # A 5xx is the CDS failing, not the request being wrong, so retry it
+        # as job_status does. Without this a passing 502 aborts the run, and a
+        # restart replays every year already fetched before it gets back here.
+        # 4xx still fails fast: a malformed request will not improve by asking
+        # again.
+        r.status >= 500 && throw(TransientError("CDS returned HTTP $(r.status)"))
+        r
     end
     response.status in (200, 201) ||
         api_error("CDS request for $dataset was rejected", response)
