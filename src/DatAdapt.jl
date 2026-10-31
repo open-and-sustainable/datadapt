@@ -60,6 +60,23 @@ function fetch_baseline_hazard_data()
         DB_PATH_RAW_BASELINE)
 end
 
+# Years fetched before the pipeline began retaining the gridded downloads: the
+# country-level data is in the database but the ERA5 files behind it were
+# deleted after aggregation. 1987 lost only one of its fourteen files, the
+# others lost all of theirs. Listed explicitly rather than detected, because a
+# grid already moved to archival storage is equally absent from disk and must
+# not be fetched a second time.
+const MISSING_GRID_YEARS = [1980, 1981, 1982, 1983, 1984, 1985, 1986, 2000]
+const MISSING_GRID_EXTRA = [(1987, "2m_temperature", "daily_minimum")]
+
+function backfill_hazard_grids()
+    items = [(year, variable, statistic)
+             for year in MISSING_GRID_YEARS
+             for (variable, statistic) in HazardDataFetch.VARIABLE_STATS]
+    append!(items, MISSING_GRID_EXTRA)
+    HazardDataFetch.backfill_grids(items)
+end
+
 # Hazard spans decades of daily country-level rows, far more than is
 # comfortable to hold in memory at once, so each year is written to the
 # database as it completes and then released. The connection stays open for

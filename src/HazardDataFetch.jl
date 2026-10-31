@@ -125,8 +125,8 @@ end
 function process_year(year::Int)
     results = Vector{Union{Nothing, DataFrame}}(nothing, length(VARIABLE_STATS))
     jobs = load_job_registry(year)
-    todo = Int[]
-    in_flight = Dict{Int, String}()
+    todo = Tuple{Int, Int}[]
+    attached = Dict{Tuple{Int, Int}, String}()
 
     for (i, (variable, statistic)) in enumerate(VARIABLE_STATS)
         if isfile(part_checkpoint_path(variable, statistic, year))
@@ -139,38 +139,134 @@ function process_year(year::Int)
             job_id = get(jobs, key, "")
             if !isempty(job_id) && job_is_alive(job_id)
                 logmsg("Re-attaching to CDS job $job_id for $variable / $statistic $year.")
-                in_flight[i] = job_id
+                attached[(year, i)] = job_id
             else
                 if !isempty(job_id)
                     delete!(jobs, key)
                     save_job_registry(year, jobs)
                 end
-                push!(todo, i)
+                push!(todo, (year, i))
             end
         end
     end
+
+    drive_cds_fetch(todo, attached) do fetched_year, i
+        variable, statistic = VARIABLE_STATS[i]
+        results[i] = aggregate_part(variable, statistic, fetched_year)
+    end
+    return vcat(results...)
+end
+
+"""
+    backfill_grids(items) -> nothing
+
+Re-download gridded files that are no longer on disk, without aggregating
+them. `items` lists `(year, variable, statistic)` triples.
+
+Early runs deleted each grid once it had been aggregated, leaving years whose
+country-level data has no source file behind it. `fetch_hazard_data` cannot
+recover those: it reloads such a year from its checkpoint and never looks at
+the grids. Nothing here is aggregated and nothing is written to the database,
+because that data already exists and re-deriving it could only disturb it.
+
+Which files are absent is not decided here: a grid already moved to archival
+storage is gone from `GRID_DIR` yet must not be fetched again, and where that
+storage is depends on the installation. Callers pass the list; files still
+present locally are skipped, so an interrupted backfill resumes.
+"""
+function backfill_grids(items)
+    todo = Tuple{Int, Int}[]
+    attached = Dict{Tuple{Int, Int}, String}()
+    years = Int[]
+
+    for (year, variable, statistic) in items
+        year in years || push!(years, year)
+        i = findfirst(==((variable, statistic)), VARIABLE_STATS)
+        i === nothing &&
+            error("$variable / $statistic is not one of the downloaded variable-statistics")
+        isfile(nc_path(variable, statistic, year)) && continue
+        jobs = load_job_registry(year)
+        key = registry_key(variable, statistic)
+        job_id = get(jobs, key, "")
+        if !isempty(job_id) && job_is_alive(job_id)
+            logmsg("Re-attaching to CDS job $job_id for $variable / $statistic $year.")
+            attached[(year, i)] = job_id
+        else
+            if !isempty(job_id)
+                delete!(jobs, key)
+                save_job_registry(year, jobs)
+            end
+            push!(todo, (year, i))
+        end
+    end
+
+    outstanding = length(todo) + length(attached)
+    if outstanding == 0
+        logmsg("No gridded files to backfill.")
+    else
+        logmsg("Backfilling $outstanding gridded files across $(length(years)) years.")
+        drive_cds_fetch(todo, attached) do year, i
+            variable, statistic = VARIABLE_STATS[i]
+            logmsg("Recovered $variable / $statistic for $year.")
+        end
+    end
+
+    # A year's job registry is also how anything that moves finished years off
+    # local disk knows the year is still being written to. Drop it only once
+    # every requested file of that year is back in place, so a half-filled
+    # year is never archived.
+    for year in years
+        all(isfile(nc_path(v, s, y)) for (y, v, s) in items if y == year) || continue
+        path = job_registry_path(year)
+        isfile(path) && rm(path)
+    end
+    return nothing
+end
+
+"""
+    drive_cds_fetch(on_ready, todo, attached) -> nothing
+
+Fetch gridded files from the CDS, keeping several jobs queued at once, and
+call `on_ready(year, index)` on each one after it is downloaded and extracted.
+
+Work items are `(year, index)` pairs, where `index` points into
+`VARIABLE_STATS`; `attached` holds the items whose CDS job is already running
+from an earlier run. Items may span years, so a backfill of gaps scattered
+over the record queues as deeply as a single year's run does.
+"""
+function drive_cds_fetch(on_ready::Function, todo::Vector{Tuple{Int, Int}},
+                         attached::Dict{Tuple{Int, Int}, String})
+    todo = copy(todo)
+    in_flight = copy(attached)
+    # One registry per year, kept open for the whole run and written through on
+    # every change: it is both the resume point and the signal to anything
+    # watching that the year is still being fetched.
+    registries = Dict{Int, Dict{String, String}}()
+    registry(year) = get!(() -> load_job_registry(year), registries, year)
 
     cap = max_in_flight()
     poll_delay = 10.0
     reject_backoff = REJECT_BACKOFF_START
     hold_submits_until = 0.0
-    attempts = Dict{Int, Int}()
+    attempts = Dict{Tuple{Int, Int}, Int}()
 
-    # Submit queued variable/statistics until the CDS holds `cap` jobs, unless a
-    # recent rejection asked us to hold off while its queue drains. Called at
-    # the top of the loop and again as soon as jobs finish, so freed slots are
-    # resubmitted before the download+aggregate rather than after it.
+    # Submit queued items until the CDS holds `cap` jobs, unless a recent
+    # rejection asked us to hold off while its queue drains. Called at the top
+    # of the loop and again as soon as jobs finish, so freed slots are
+    # resubmitted before the download and handover rather than after them.
     refill!() = begin
         if time() >= hold_submits_until
             while !isempty(todo) && length(in_flight) < cap
-                i = popfirst!(todo)
+                item = popfirst!(todo)
+                year, i = item
                 variable, statistic = VARIABLE_STATS[i]
                 key = registry_key(variable, statistic)
                 logmsg("Requesting $variable / $statistic for $year from the CDS...")
                 job_id = CDSAPI.submit_job(DATASET, cds_request(variable, statistic, year))
+                jobs = registry(year)
                 jobs[key] = job_id
                 save_job_registry(year, jobs)
-                in_flight[i] = job_id
+                in_flight[item] = job_id
             end
         end
     end
@@ -179,24 +275,26 @@ function process_year(year::Int)
         refill!()
 
         # Poll every in-flight job; collect the finished ones but defer their
-        # download/aggregate so we can refill the freed slots first.
+        # download so we can refill the freed slots first.
         progressed = false
-        ready = Tuple{Int, String}[]
-        for (i, job_id) in collect(in_flight)
+        ready = Tuple{Tuple{Int, Int}, String}[]
+        for (item, job_id) in collect(in_flight)
+            year, i = item
             variable, statistic = VARIABLE_STATS[i]
             key = registry_key(variable, statistic)
+            jobs = registry(year)
             status, message = CDSAPI.job_status(job_id)
             if status == "successful"
-                delete!(in_flight, i)
-                push!(ready, (i, job_id))
+                delete!(in_flight, item)
+                push!(ready, (item, job_id))
             elseif status == "rejected"
                 # Per-account queued limit hit; not a real failure. Requeue,
                 # lower the cap by one, and pause submissions for a growing
                 # backoff so the queue can drain.
                 delete!(jobs, key)
                 save_job_registry(year, jobs)
-                delete!(in_flight, i)
-                push!(todo, i)
+                delete!(in_flight, item)
+                push!(todo, item)
                 cap = max(1, cap - 1)
                 hold_submits_until = time() + reject_backoff
                 logmsg("CDS job $job_id ($variable / $statistic $year) rejected " *
@@ -208,17 +306,17 @@ function process_year(year::Int)
                 # whole run; a persistent failure still surfaces after the cap.
                 delete!(jobs, key)
                 save_job_registry(year, jobs)
-                delete!(in_flight, i)
-                attempts[i] = get(attempts, i, 0) + 1
-                if attempts[i] >= MAX_ATTEMPTS
+                delete!(in_flight, item)
+                attempts[item] = get(attempts, item, 0) + 1
+                if attempts[item] >= MAX_ATTEMPTS
                     error("CDS job $job_id for $variable / $statistic $year $status " *
-                          "after $(attempts[i]) attempts: " *
+                          "after $(attempts[item]) attempts: " *
                           (isempty(message) ? "no error message provided" : message))
                 end
-                push!(todo, i)
+                push!(todo, item)
                 hold_submits_until = max(hold_submits_until, time() + FAILED_RETRY_DELAY)
                 logmsg("CDS job $job_id ($variable / $statistic $year) $status " *
-                       "(attempt $(attempts[i])/$MAX_ATTEMPTS); resubmitting in " *
+                       "(attempt $(attempts[item])/$MAX_ATTEMPTS); resubmitting in " *
                        "$(round(Int, FAILED_RETRY_DELAY))s.")
             end
         end
@@ -226,7 +324,8 @@ function process_year(year::Int)
         # Refill the freed slots now, before the slow local work below.
         isempty(ready) || refill!()
 
-        for (i, job_id) in ready
+        for (item, job_id) in ready
+            year, i = item
             variable, statistic = VARIABLE_STATS[i]
             key = registry_key(variable, statistic)
             logmsg("CDS job $job_id ($variable / $statistic $year) finished.")
@@ -234,7 +333,8 @@ function process_year(year::Int)
             mkpath(dirname(archive_path))
             CDSAPI.download_result(job_id, archive_path)
             extract_netcdf(archive_path, nc_path(variable, statistic, year))
-            results[i] = aggregate_part(variable, statistic, year)
+            on_ready(year, i)
+            jobs = registry(year)
             delete!(jobs, key)
             save_job_registry(year, jobs)
             progressed = true
@@ -247,7 +347,7 @@ function process_year(year::Int)
             poll_delay = min(poll_delay * 1.5, 120.0)
         end
     end
-    return vcat(results...)
+    return nothing
 end
 
 function cds_request(variable::String, statistic::String, year::Int)
