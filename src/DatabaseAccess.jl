@@ -217,14 +217,21 @@ function installPRQL_DuckDBextension()
     end
 end
 
-function executePRQL(dbpath::String, prqlpath::String)::DataFrame
+# `tables` makes in-memory DataFrames queryable by name alongside the
+# database's own tables, for inputs prepared in Julia before the query runs.
+function executePRQL(dbpath::String, prqlpath::String;
+                     tables::Dict{String,DataFrame} = Dict{String,DataFrame}())::DataFrame
     # Create a connection to the DuckDB database
     con = DuckDB.DB(dbpath)
-    
+
     try
+        for (name, df) in tables
+            DuckDB.register_data_frame(con, df, name)
+        end
+
         # Load the PRQL extension
         DuckDB.execute(con, "LOAD 'prql';")
-        
+
         # Read the PRQL code from the file
         prql_query = read(prqlpath, String)
         

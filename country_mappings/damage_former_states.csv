@@ -1,0 +1,69 @@
+DisNo.,ISO,Location,successor,note
+1989-0115-ANT,ANT,,,no location
+1995-0193-ANT,ANT,"Sint Marrten, Sint Eustasius, Saba",,two successors; losses cannot be split
+1981-0214-CSK,CSK,"Středočeský kraj, Jihočeský kraj, Plzeňský kraj, Ústecký kraj, Liberecký kraj (Czechia)",CZE,
+1981-0215-CSK,CSK,,,no location
+1985-0247-CSK,CSK,,,no location
+1985-0248-CSK,CSK,Tatra Mountain (Slovakia),SVK,
+1987-0100-CSK,CSK,Slovakia,SVK,
+1987-0350-CSK,CSK,,,no location
+1985-0189-DDR,DDR,,DEU,single successor
+1983-0340-DFR,DFR,"Bremen, Mecklenburg-Vorpommern, Lüneburg, Weser-Ems, Schleswig-Holstein",DEU,single successor
+1983-0349-DFR,DFR,"Heilbronn, Stadtkreis, Karlsruhe, Stadtkreis, Heidelberg, Stadtkreis, Düsseldorf, Kreisfreie Stadt, Bonn, Kreisfreie Stadt, Köln, Kreisfreie Stadt, Koblenz, Kreisfreie Stadt, Cochem-Zell, Mayen-Koblenz, Trier, Kreisfreie Stadt, Bernkastel-Wittlich, Regionalverband Saarbrücken",DEU,single successor
+1983-0350-DFR,DFR,Basse-Saxe,DEU,single successor
+1984-0063-DFR,DFR,"Münich (Bavaria); Mecklenburg-Vorpommern, Hannover, Lüneburg, Weser-Ems, Schleswig-Holstein, Thüringen",DEU,single successor
+1985-0179-DFR,DFR,"Oberbayern, Berlin, Brandenburg, Darmstadt, Gießen, Lüneburg",DEU,single successor
+1988-0139-DFR,DFR,"Passau, Kreisfreie Stadt, Straubing, Kreisfreie Stadt, Passau, Landkreis, Regensburg, Kreisfreie Stadt, Bamberg, Landkreis, Erlangen, Kreisfreie Stadt, Roth, Würzburg, Kreisfreie Stadt, Haßberge, Kitzingen, Schweinfurt, Landkreis, Würzburg, Landkreis (Bavaria)",DEU,single successor
+1992-0165-SCG,SCG,Mojokovac (Montenegro),MNE,
+1999-0240-SCG,SCG,"Belgrade, Podunavlje, Sumadija, Morava, Pomoravlje & Bor Districts (Serbia)",SRB,
+1999-0578-SCG,SCG,"Kikinda, Novo Milosevo, Loznica, Valjevo, Smederevska Palanka (Serbia)",SRB,
+2000-0196-SCG,SCG,"Surjan, Konaks towns (Srednje-banatski province) (Serbia)",SRB,from GADM codes
+2000-0383-SCG,SCG,"Subotica city (Severno-backi province), Belgrade city (Grad Beograd province), Leskovac city (Jablanicki province) (Serbia)",SRB,from GADM codes
+2000-0868-SCG,SCG,"Danilovgrad, Kotor, Cetinje, Bar, Podgorica provinces (Montenegro)",MNE,from GADM codes
+2001-0802-SCG,SCG,"Kolubarska oblast, Mačvanska oblast",SRB,both districts are in Serbia
+2002-0367-SCG,SCG,Pozarevac town (Branicevski province) (Serbia),SRB,from GADM codes
+2005-0045-SCG,SCG,"Tutin, Raska, Novi Pazar towns (Raski province), Prijepolje, Sjenica towns (Zlatiborski province), Savnik, Zabljak, Pluzine, Kolasin, Bijelo Polje, Cetinje, Niksic, Mojkovac, Berane, Rozaj, Pljevlja, Andrijevica, Plav, Bar provinces (Serbia)",,GADM codes in two successors; losses cannot be split
+2005-0214-SCG,SCG,"Jasa Tomic, Medja, Secanj, Zitiste ctowns (Srednje-banatski province), Plandiste, Veliki Gaj, Bela Crkva towns (Juzno-banatski provinces) (Serbia)",SRB,from GADM codes
+2005-0713-SCG,SCG,"Andrijevica, Berane, Bijelo Polje, Borski, Branicevski, Grad Beograd, Jablanicki, Juzno-backi, Juzno-banatski, Kolubarski, Kosovski, Kosovsko-mitrovatski, Kosovsko-pomoravski, Macvanski, Moravicki, Nisavski, Pcinjski, Pecki, Pirotski, Plav, Podunavski, Pomoravski, Prizremski, Rasinski, Raski, Rozaj, Severno-backi, Severno-banatski, Srednje-banatski, Sremski, Sumadijski, Toplicki, Zajecarski, Zapadno-backi, Zlatiborski provinces (Serbia & Montenegro)",,GADM codes in three successors; losses cannot be split
+2006-0109-SCG,SCG,"Rahovec, Suhareke, Malishevo towns (Prizremski province), Vushtrri, Skenderaj, Zvecan towns (Kosovsko-mitrovatski province), Lipjan, Ferizaj, Gllogovc, Podujevo, Obiliq, Fushe Kosovoe towns (Kosovski province), Kline, Gjakove towns (Pecki province) (Serbia)",XKO,from GADM codes; Kosovo as coded by GADM
+2006-0156-SCG,SCG,"Zabalj, Titel, Beocin, Novi Sad towns (Juzno-backi province), Slankamen town (Sremski province), Sabac, Loznica towns (Macvanski province), Belgrade town (Grad Beograd province), Smederevo town (Podunavski province), Kostolac, Pozarevac, Gradiste, Golubac towns (Branicevski province), Zrenjanin town (Srednje-banatski province) (Serbia)",SRB,from GADM codes
+1981-0280-SUN,SUN,East,,too vague
+1981-0301-SUN,SUN,,,no location
+1982-0345-SUN,SUN,Siberia,RUS,
+1982-0346-SUN,SUN,East,,too vague
+1983-0392-SUN,SUN,Kaliningrad (Russian Federation),RUS,
+1983-0397-SUN,SUN,Khabarovsk (Russian Federation),RUS,
+1983-0400-SUN,SUN,Georgia,GEO,
+1984-0045-SUN,SUN,Caucasus region,,too vague: several successors
+1984-0052-SUN,SUN,"Ivanovo, Northeast Moscow, Kostroma/Lyubim (Russian Federation)",RUS,
+1984-0287-SUN,SUN,Leningrad region (Russian Federation),RUS,
+1985-0036-SUN,SUN,Southern Ukraine,UKR,
+1985-0090-SUN,SUN,Khabarovsk (Russian Federation),RUS,
+1987-0054-SUN,SUN,Tbilisi (Georgia),GEO,
+1987-0074-SUN,SUN,Argazan (Tajikistan),TJK,
+1987-0090-SUN,SUN,Eastern Siberia (Russia),RUS,
+1987-0377-SUN,SUN,Schamuschi (Georgia),GEO,
+1988-0236-SUN,SUN,Ukraine,UKR,
+1989-0151-SUN,SUN,Adzharia (Georgia),GEO,
+1989-0435-SUN,SUN,Caucasus (Georgia),GEO,
+1989-0572-SUN,SUN,Far East (Russian Federation),RUS,
+1990-0225-SUN,SUN,Pik Lenina (Hindu Kush) (Tajikistan),TJK,country as given; the peak is on the Kyrgyzstan-Tajikistan border
+1990-0354-SUN,SUN,Bachkiria region (Ural) (Russian Federation),RUS,
+1990-0379-SUN,SUN,Chita Region (bordering Mongolia) (Oriental Siberia) (Russian Federation),RUS,
+1990-0711-SUN,SUN,Murgabsky (Tajikistan),TJK,
+1990-0712-SUN,SUN,"Tura, Uchami (Krasnoyarsk district) (Russian Federation)",RUS,
+1991-0161-SUN,SUN,Volgograd Region (Russian Federation),RUS,
+1991-0307-SUN,SUN,"Sochi-Tuapse, Black Sea Coast (Ukraine)",RUS,Sochi and Tuapse are in Russia; EM-DAT's '(Ukraine)' is wrong
+1991-0522-SUN,SUN,Ulan-Ude region (Buryatia) (Russian Federation),RUS,
+1981-0035-YMD,YMD,,YEM,single successor
+1981-0079-YMD,YMD,Abyan,YEM,single successor
+1982-0042-YMD,YMD,Nationwide,YEM,single successor
+1989-0037-YMD,YMD,Saiyoon district (Central and Eastern regions),YEM,single successor
+1989-0433-YMN,YMN,,YEM,single successor
+1981-0267-YUG,YUG,"Beogradska oblast, Pomoravska oblast, Rasinska oblast, Šumadijska oblast, Podunavska oblast (Serbia)",SRB,
+1983-0409-YUG,YUG,"Pelijesac, Dubrovnik (Croatia)",HRV,
+1985-0295-YUG,YUG,Korcala Isl. (Croatia),HRV,
+1986-0002-YUG,YUG,"Pomoravska oblast, Šumadijska oblast (Serbia); Crna Gora (Montenegro)",,two successors; losses cannot be split
+1988-0308-YUG,YUG,Belgrade (Serbia),SRB,
+1990-0415-YUG,YUG,"Savinjska, Zasavska, Spodnjeposavska, Jugovzhodna Slovenija, Osrednjeslovenska, Gorenjska (Slovenia,); Croatia",,two successors; losses cannot be split
+1990-9717-YUG,YUG,Central (Serbia),SRB,

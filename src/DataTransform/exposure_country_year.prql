@@ -1,4 +1,4 @@
-from exposure
+from exposure_located
 derive {
   population_total = s"CASE WHEN indicator = 'SP.POP.TOTL' THEN value ELSE NULL END",
   surface_area_sq_km = s"CASE WHEN indicator = 'AG.SRF.TOTL.K2' THEN value ELSE NULL END",

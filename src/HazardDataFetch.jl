@@ -11,6 +11,7 @@ using ZipFile
 using Shapefile
 using GeoInterface
 using LibGEOS
+using SQLite
 
 using ..CDSAPI
 using ..CDSAPI: logmsg
@@ -489,11 +490,20 @@ function get_country_assignment(nc_path::String)
     shp_path = ensure_countries_shapefile()
     features = load_country_features(shp_path)
 
+    df = assign_cells(lon, lat, features)
+    CSV.write(cache_path, df)
+    logmsg("Assigned $(nrow(df)) land cells to $(length(unique(df.iso3))) countries.")
+    return build_country_cells(df, lat)
+end
+
+# Assign each grid cell to the first feature that contains its centre. Cells
+# in no feature (sea) are left out.
+function assign_cells(lon::Vector{Float64}, lat::Vector{Float64}, features)
     lon_idx = Int[]
     lat_idx = Int[]
     iso3 = String[]
     for (j, λ) in enumerate(lon)
-        x = λ > 180 ? λ - 360 : λ  # ERA5 uses 0..360, Natural Earth -180..180
+        x = λ > 180 ? λ - 360 : λ  # ERA5 uses 0..360, the maps -180..180
         for (i, φ) in enumerate(lat)
             point = LibGEOS.Point(x, φ)
             for f in features
@@ -507,10 +517,7 @@ function get_country_assignment(nc_path::String)
             end
         end
     end
-    df = DataFrame(lon_idx = lon_idx, lat_idx = lat_idx, iso3 = iso3)
-    CSV.write(cache_path, df)
-    logmsg("Assigned $(nrow(df)) land cells to $(length(unique(df.iso3))) countries.")
-    return build_country_cells(df, lat)
+    return DataFrame(lon_idx = lon_idx, lat_idx = lat_idx, iso3 = iso3)
 end
 
 function load_country_features(shp_path::String)
@@ -531,6 +538,110 @@ function load_country_features(shp_path::String)
                          bottom = mbr.bottom, top = mbr.top))
     end
     return features
+end
+
+# ---------------------------------------------------------------------------
+# Country map shared with damage and exposure
+# ---------------------------------------------------------------------------
+
+# Countries are kept at the finest level hazard, damage and exposure all share.
+# The map is GADM 4.1 at country level, the map EM-DAT's codes come from, which
+# keeps every territory apart; HAZARD_UNITS_PATH maps each GADM unit to the
+# country code used for damage and exposure, merging the territories whose
+# World Bank series another country includes. GADM's licence does not allow
+# redistribution, so the GeoPackage is downloaded, not committed.
+const GADM_PATH = "country_mappings/source_maps/gadm_4.1/gadm_410-levels.gpkg"
+const HAZARD_UNITS_PATH = "country_mappings/hazard_units.csv"
+
+# A GeoPackage geometry is a header (magic, version, flags, SRS id, then an
+# envelope whose size the flags give) followed by standard WKB.
+function gpkg_geometry(blob::Vector{UInt8})
+    envelope = (0, 32, 48, 48, 64)[((blob[4] >> 1) & 0x07) + 1]
+    return LibGEOS.readgeom(blob[9 + envelope:end])
+end
+
+function load_unit_features()
+    units = CSV.read(HAZARD_UNITS_PATH, DataFrame; types = String)
+    code_of = Dict(row.gadm_code => coalesce(row.code, "") for row in eachrow(units))
+    db = SQLite.DB(GADM_PATH)
+    features = []
+    try
+        # Units taken from GADM's regional level (Hong Kong, Macao) lie inside
+        # a country polygon, so they come first: the first feature that
+        # contains a cell wins.
+        level1 = [gid for gid in keys(code_of) if occursin('.', gid)]
+        rows = vcat(
+            DataFrame(DBInterface.execute(db,
+                "SELECT GID_1 AS gid, geom FROM ADM_1 WHERE GID_1 IN " *
+                "($(join(("'$gid'" for gid in level1), ", ")))")),
+            DataFrame(DBInterface.execute(db, "SELECT GID_0 AS gid, geom FROM ADM_0")))
+        nrow(rows) == length(code_of) ||
+            error("$HAZARD_UNITS_PATH lists $(length(code_of)) units, GADM has $(nrow(rows))")
+        for row in eachrow(rows)
+            haskey(code_of, row.gid) || error("GADM unit $(row.gid) missing from $HAZARD_UNITS_PATH")
+            code = code_of[row.gid]
+            isempty(code) && continue  # not a country (the Caspian Sea)
+            geom = gpkg_geometry(Vector{UInt8}(row.geom))
+            box = GeoInterface.extent(geom)
+            push!(features, (iso3 = code, prepared = LibGEOS.prepareGeom(geom),
+                             left = box.X[1], right = box.X[2],
+                             bottom = box.Y[1], top = box.Y[2]))
+        end
+    finally
+        close(db)
+    end
+    return features
+end
+
+"""
+    get_unit_assignment(nc_path) -> Dict{String, NamedTuple}
+
+As `get_country_assignment`, but on the country map shared with damage and
+exposure. The cache is keyed by the merge table's content, so editing the
+table forces a new assignment.
+"""
+function get_unit_assignment(nc_path::String)
+    lon, lat = Dataset(nc_path) do ds
+        Float64.(ds["longitude"][:]), Float64.(ds["latitude"][:])
+    end
+
+    key = string(hash(read(HAZARD_UNITS_PATH)); base = 16)
+    cache_path = joinpath(DATA_DIR, "grid_unit_assignment_$(length(lon))x$(length(lat))_$key.csv")
+    if isfile(cache_path)
+        df = CSV.read(cache_path, DataFrame; types = Dict(:iso3 => String))
+        return build_country_cells(df, lat)
+    end
+
+    logmsg("Assigning grid cells to GADM-based countries (done once, may take a while)...")
+    df = assign_cells(lon, lat, load_unit_features())
+    CSV.write(cache_path, df)
+    logmsg("Assigned $(nrow(df)) land cells to $(length(unique(df.iso3))) countries.")
+    return build_country_cells(df, lat)
+end
+
+"""
+    reaggregate_year(year; grid_dir = GRID_DIR) -> DataFrame or nothing
+
+Aggregate one year's retained grids to the country map shared with damage
+and exposure, in the same long format as `fetch_hazard_data`. Returns
+`nothing`, without aggregating anything, unless all of the year's grids are
+on local disk. `grid_dir` lets grids brought back from archival storage be
+read from a directory of their own, laid out like `GRID_DIR`.
+"""
+function reaggregate_year(year::Int; grid_dir::String = GRID_DIR)
+    paths = [joinpath(grid_dir, string(year), basename(nc_path(variable, statistic, year)))
+             for (variable, statistic) in VARIABLE_STATS]
+    absent = count(!isfile, paths)
+    if absent > 0
+        logmsg("$year: $absent of $(length(paths)) grids not on local disk; skipping.")
+        return nothing
+    end
+    countries = get_unit_assignment(first(paths))
+    parts = map(zip(paths, VARIABLE_STATS)) do (path, (variable, statistic))
+        logmsg("Re-aggregating $variable / $statistic for $year...")
+        aggregate_country_daily(path, variable, statistic, countries)
+    end
+    return vcat(parts...)
 end
 
 function build_country_cells(df::DataFrame, lat::Vector{Float64})

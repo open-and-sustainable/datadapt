@@ -2,7 +2,7 @@
 
 julia_version = "1.12.5"
 manifest_format = "2.0"
-project_hash = "4d673c1a1afaf3e9b55239e6af9c75a6a745b965"
+project_hash = "dc84f74effdb730ba97e14ab04935608e65b0653"
 
 [[deps.ArgCheck]]
 git-tree-sha1 = "f9e9a66c9b7be1ad7372bbd9b062d9230c30c5ce"
@@ -580,6 +580,18 @@ version = "1.2.2"
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 version = "0.7.0"
 
+[[deps.SQLite]]
+deps = ["DBInterface", "Random", "SQLite_jll", "Serialization", "Tables", "WeakRefStrings"]
+git-tree-sha1 = "0393b6a3322096e1e269df61ef205a4acfb5a801"
+uuid = "0aa819cd-b072-5ff4-a722-6bc24af294d9"
+version = "1.11.0"
+
+[[deps.SQLite_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Zlib_jll", "dlfcn_win32_jll"]
+git-tree-sha1 = "ec7c8a5d23c3c5faf1c1e5a220840ecb8656b49d"
+uuid = "76ed43ae-9a5d-5a62-8c75-30186b810ce8"
+version = "3.54.1+0"
+
 [[deps.SentinelArrays]]
 deps = ["Dates", "Random"]
 git-tree-sha1 = "084c47c7c5ce5cfecefa0a98dff69eb3646b5a80"
@@ -765,6 +777,12 @@ deps = ["Artifacts", "JLLWrappers", "Libdl"]
 git-tree-sha1 = "446b23e73536f84e8037f5dce465e92275f6a308"
 uuid = "3161d3a3-bdf6-5164-811a-617609db77b4"
 version = "1.5.7+1"
+
+[[deps.dlfcn_win32_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "e141d67ffe550eadfb5af1bdbdaf138031e4805f"
+uuid = "c4b69c83-5512-53e3-94e6-de98773c479f"
+version = "1.4.2+0"
 
 [[deps.libaec_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]

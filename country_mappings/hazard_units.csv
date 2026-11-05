@@ -1,0 +1,266 @@
+gadm_code,gadm_name,code,note
+ABW,Aruba,ABW,
+AFG,Afghanistan,AFG,
+AGO,Angola,AGO,
+AIA,Anguilla,AIA,no World Bank series of its own; kept separate
+ALA,Åland,FIN,World Bank surface area for Finland includes it
+ALB,Albania,ALB,
+AND,Andorra,AND,
+ARE,United Arab Emirates,ARE,
+ARG,Argentina,ARG,
+ARM,Armenia,ARM,
+ASM,American Samoa,ASM,
+ATA,Antarctica,ATA,no World Bank series of its own; kept separate
+ATF,French Southern Territories,ATF,no World Bank series of its own; kept separate
+ATG,Antigua and Barbuda,ATG,
+AUS,Australia,AUS,
+AUT,Austria,AUT,
+AZE,Azerbaijan,AZE,
+BDI,Burundi,BDI,
+BEL,Belgium,BEL,
+BEN,Benin,BEN,
+BES,"Bonaire, Sint Eustatius and Saba",BES,World Bank surface area for the Netherlands excludes it
+BFA,Burkina Faso,BFA,
+BGD,Bangladesh,BGD,
+BGR,Bulgaria,BGR,
+BHR,Bahrain,BHR,
+BHS,Bahamas,BHS,
+BIH,Bosnia and Herzegovina,BIH,
+BLM,Saint-Barthélemy,BLM,no World Bank series of its own; kept separate
+BLR,Belarus,BLR,
+BLZ,Belize,BLZ,
+BMU,Bermuda,BMU,
+BOL,Bolivia,BOL,
+BRA,Brazil,BRA,
+BRB,Barbados,BRB,
+BRN,Brunei,BRN,
+BTN,Bhutan,BTN,
+BVT,Bouvet Island,BVT,no World Bank series of its own; kept separate
+BWA,Botswana,BWA,
+CAF,Central African Republic,CAF,
+CAN,Canada,CAN,
+CCK,Cocos Islands,AUS,"Australian territory; World Bank coverage unclear, merged into Australia"
+CHE,Switzerland,CHE,
+CHL,Chile,CHL,
+CHN,China,CHN,
+CIV,Côte d'Ivoire,CIV,
+CMR,Cameroon,CMR,
+COD,Democratic Republic of the Congo,COD,
+COG,Republic of the Congo,COG,
+COK,Cook Islands,COK,no World Bank series of its own; kept separate
+COL,Colombia,COL,
+COM,Comoros,COM,
+CPV,Cabo Verde,CPV,
+CRI,Costa Rica,CRI,
+CUB,Cuba,CUB,
+CUW,Curaçao,CUW,
+CXR,Christmas Island,AUS,"Australian territory; World Bank coverage unclear, merged into Australia"
+CYM,Cayman Islands,CYM,
+CYP,Cyprus,CYP,
+CZE,Czechia,CZE,
+DEU,Germany,DEU,
+DJI,Djibouti,DJI,
+DMA,Dominica,DMA,
+DNK,Denmark,DNK,
+DOM,Dominican Republic,DOM,
+DZA,Algeria,DZA,
+ECU,Ecuador,ECU,
+EGY,Egypt,EGY,
+ERI,Eritrea,ERI,
+ESH,Western Sahara,ESH,World Bank surface area for Morocco excludes it
+ESP,Spain,ESP,
+EST,Estonia,EST,
+ETH,Ethiopia,ETH,
+FIN,Finland,FIN,
+FJI,Fiji,FJI,
+FLK,Falkland Islands,FLK,no World Bank series of its own; kept separate
+FRA,France,FRA,
+FRO,Faroe Islands,FRO,
+FSM,Micronesia,FSM,
+GAB,Gabon,GAB,
+GBR,United Kingdom,GBR,
+GEO,Georgia,GEO,
+GGY,Guernsey,CHI,World Bank Channel Islands
+GHA,Ghana,GHA,
+GIB,Gibraltar,GIB,
+GIN,Guinea,GIN,
+GLP,Guadeloupe,FRA,World Bank population for France includes it
+GMB,Gambia,GMB,
+GNB,Guinea-Bissau,GNB,
+GNQ,Equatorial Guinea,GNQ,
+GRC,Greece,GRC,
+GRD,Grenada,GRD,
+GRL,Greenland,GRL,
+GTM,Guatemala,GTM,
+GUF,French Guiana,FRA,World Bank population for France includes it
+GUM,Guam,GUM,
+GUY,Guyana,GUY,
+HMD,Heard Island and McDonald Island,HMD,no World Bank series of its own; kept separate
+HND,Honduras,HND,
+HRV,Croatia,HRV,
+HTI,Haiti,HTI,
+HUN,Hungary,HUN,
+IDN,Indonesia,IDN,
+IMN,Isle of Man,IMN,
+IND,India,IND,
+IOT,British Indian Ocean Territory,IOT,no World Bank series of its own; kept separate
+IRL,Ireland,IRL,
+IRN,Iran,IRN,
+IRQ,Iraq,IRQ,
+ISL,Iceland,ISL,
+ISR,Israel,ISR,
+ITA,Italy,ITA,
+JAM,Jamaica,JAM,
+JEY,Jersey,CHI,World Bank Channel Islands
+JOR,Jordan,JOR,
+JPN,Japan,JPN,
+KAZ,Kazakhstan,KAZ,
+KEN,Kenya,KEN,
+KGZ,Kyrgyzstan,KGZ,
+KHM,Cambodia,KHM,
+KIR,Kiribati,KIR,
+KNA,Saint Kitts and Nevis,KNA,
+KOR,South Korea,KOR,
+KWT,Kuwait,KWT,
+LAO,Laos,LAO,
+LBN,Lebanon,LBN,
+LBR,Liberia,LBR,
+LBY,Libya,LBY,
+LCA,Saint Lucia,LCA,
+LIE,Liechtenstein,LIE,
+LKA,Sri Lanka,LKA,
+LSO,Lesotho,LSO,
+LTU,Lithuania,LTU,
+LUX,Luxembourg,LUX,
+LVA,Latvia,LVA,
+MAF,Saint-Martin,MAF,
+MAR,Morocco,MAR,
+MCO,Monaco,MCO,
+MDA,Moldova,MDA,
+MDG,Madagascar,MDG,
+MDV,Maldives,MDV,
+MEX,México,MEX,
+MHL,Marshall Islands,MHL,
+MKD,North Macedonia,MKD,
+MLI,Mali,MLI,
+MLT,Malta,MLT,
+MMR,Myanmar,MMR,
+MNE,Montenegro,MNE,
+MNG,Mongolia,MNG,
+MNP,Northern Mariana Islands,MNP,
+MOZ,Mozambique,MOZ,
+MRT,Mauritania,MRT,
+MSR,Montserrat,MSR,no World Bank series of its own; kept separate
+MTQ,Martinique,FRA,World Bank population for France includes it
+MUS,Mauritius,MUS,
+MWI,Malawi,MWI,
+MYS,Malaysia,MYS,
+MYT,Mayotte,FRA,World Bank population for France includes it
+NAM,Namibia,NAM,
+NCL,New Caledonia,NCL,
+NER,Niger,NER,
+NFK,Norfolk Island,AUS,"Australian territory; World Bank coverage unclear, merged into Australia"
+NGA,Nigeria,NGA,
+NIC,Nicaragua,NIC,
+NIU,Niue,NIU,no World Bank series of its own; kept separate
+NLD,Netherlands,NLD,
+NOR,Norway,NOR,
+NPL,Nepal,NPL,
+NRU,Nauru,NRU,
+NZL,New Zealand,NZL,
+OMN,Oman,OMN,
+PAK,Pakistan,PAK,
+PAN,Panama,PAN,
+PCN,Pitcairn Islands,PCN,no World Bank series of its own; kept separate
+PER,Peru,PER,
+PHL,Philippines,PHL,
+PLW,Palau,PLW,
+PNG,Papua New Guinea,PNG,
+POL,Poland,POL,
+PRI,Puerto Rico,PRI,
+PRK,North Korea,PRK,
+PRT,Portugal,PRT,
+PRY,Paraguay,PRY,
+PSE,Palestine,PSE,
+PYF,French Polynesia,PYF,
+QAT,Qatar,QAT,
+REU,Réunion,FRA,World Bank population for France includes it
+ROU,Romania,ROU,
+RUS,Russia,RUS,
+RWA,Rwanda,RWA,
+SAU,Saudi Arabia,SAU,
+SDN,Sudan,SDN,
+SEN,Senegal,SEN,
+SGP,Singapore,SGP,
+SGS,South Georgia and the South Sand,SGS,no World Bank series of its own; kept separate
+SHN,"Saint Helena, Ascension and Tris",SHN,no World Bank series of its own; kept separate
+SJM,Svalbard and Jan Mayen,NOR,World Bank surface area for Norway includes it
+SLB,Solomon Islands,SLB,
+SLE,Sierra Leone,SLE,
+SLV,El Salvador,SLV,
+SMR,San Marino,SMR,
+SOM,Somalia,SOM,
+SPM,Saint Pierre and Miquelon,SPM,no World Bank series of its own; kept separate
+SRB,Serbia,SRB,
+SSD,South Sudan,SSD,
+STP,São Tomé and Príncipe,STP,
+SUR,Suriname,SUR,
+SVK,Slovakia,SVK,
+SVN,Slovenia,SVN,
+SWE,Sweden,SWE,
+SWZ,Swaziland,SWZ,
+SXM,Sint Maarten,SXM,
+SYC,Seychelles,SYC,
+SYR,Syria,SYR,
+TCA,Turks and Caicos Islands,TCA,
+TCD,Chad,TCD,
+TGO,Togo,TGO,
+THA,Thailand,THA,
+TJK,Tajikistan,TJK,
+TKL,Tokelau,TKL,no World Bank series of its own; kept separate
+TKM,Turkmenistan,TKM,
+TLS,Timor-Leste,TLS,
+TON,Tonga,TON,
+TTO,Trinidad and Tobago,TTO,
+TUN,Tunisia,TUN,
+TUR,Turkey,TUR,
+TUV,Tuvalu,TUV,
+TWN,Taiwan,TWN,no World Bank series of its own; kept separate
+TZA,Tanzania,TZA,
+UGA,Uganda,UGA,
+UKR,Ukraine,UKR,
+UMI,United States Minor Outlying Isl,UMI,no World Bank series of its own; kept separate
+URY,Uruguay,URY,
+USA,United States,USA,
+UZB,Uzbekistan,UZB,
+VAT,Vatican City,VAT,no World Bank series of its own; kept separate
+VCT,Saint Vincent and the Grenadines,VCT,
+VEN,Venezuela,VEN,
+VGB,British Virgin Islands,VGB,
+VIR,"Virgin Islands, U.S.",VIR,
+VNM,Vietnam,VNM,
+VUT,Vanuatu,VUT,
+WLF,Wallis and Futuna,WLF,no World Bank series of its own; kept separate
+WSM,Samoa,WSM,
+XAD,Akrotiri and Dhekelia,CYP,World Bank surface area for Cyprus covers the whole island
+XCA,Caspian Sea,,"Caspian Sea, not a country"
+XCL,Clipperton Island,XCL,no World Bank series of its own; kept separate
+XKO,Kosovo,XKO,own World Bank series (XKX); Serbia's excludes it
+XPI,Paracel Islands,XPI,no World Bank series of its own; kept separate
+XSP,Spratly Islands,XSP,no World Bank series of its own; kept separate
+YEM,Yemen,YEM,
+Z01,India,IND,administered by India
+Z02,China,CHN,administered by China
+Z03,China,CHN,administered by China
+Z04,India,IND,administered by India
+Z05,India,IND,administered by India
+Z06,Pakistan,PAK,administered by Pakistan
+Z07,India,IND,administered by India
+Z08,China,CHN,administered by China
+Z09,India,IND,administered by India
+ZAF,South Africa,ZAF,
+ZMB,Zambia,ZMB,
+ZNC,Northern Cyprus,CYP,World Bank surface area and population for Cyprus cover the whole island
+ZWE,Zimbabwe,ZWE,
+CHN.HKG,Hong Kong,HKG,GADM region of China; the World Bank's China excludes it
+CHN.MAC,Macao,MAC,GADM region of China; the World Bank's China excludes it

@@ -1,4 +1,4 @@
-from damage
+from damage_located
 derive {
   total_deaths_double = s"CAST(\"Total Deaths\" AS DOUBLE)",
   total_injured_double = s"CAST(\"No. Injured\" as DOUBLE)",
@@ -7,8 +7,9 @@ derive {
   total_damage_double = s"CAST(\"Total Damage ('000 US$)\" as DOUBLE)",
   total_damage_adjusted_double = s"CAST(\"Total Damage, Adjusted ('000 US$)\" as DOUBLE)"
 }
-group {ISO, `Disaster Type`, `Start Year`, `Country`,`Subregion`, `Region`, `CPI`} (
-  aggregate {                               
+group {ISO, `Disaster Type`, `Start Year`, `CPI`} (
+  aggregate {
+    iso_emdat = s"string_agg(DISTINCT ISO_EMDAT, ';' ORDER BY ISO_EMDAT)",
     record_count = count this,
     total_deaths = sum total_deaths_double,
     total_injured = sum total_injured_double,
