@@ -1,1 +1,4 @@
-from hazard
+# National annual hazard values, one row per country, year and event type,
+# from the raw table hazard_national (src/HazardTransform.jl). Adjustments for
+# the processed database go here.
+from hazard_national

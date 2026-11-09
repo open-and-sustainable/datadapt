@@ -1,6 +1,7 @@
 module DatAdapt
 
 using DataFrames
+import DuckDB
 using DuckDB: DBInterface
 
 # Time period covered by the database; actual table coverage is
@@ -25,6 +26,7 @@ include("DatabaseAccess.jl")
 include("ExposureDataFetch.jl")
 include("DamageDataFetch.jl")
 include("HazardDataFetch.jl")
+include("HazardTransform.jl")
 include("CountryMapping.jl")
 
 using .CDSAPI: logmsg
@@ -174,6 +176,42 @@ function switch_hazard_tables()
     return nothing
 end
 
+const HAZARD_NATIONAL_SOURCE = HAZARD_SOURCE * "; national values by src/HazardTransform.jl " *
+    "(docs/manual.md, Hazard transformation method)"
+
+# Write a DataFrame through DuckDB directly, so a column with missing values
+# keeps its type, with the missing values as NULL (write_duckdb_table! would
+# store such a column as strings).
+function write_table_as_is!(con::DuckDB.DB, df::DataFrame, table::String)
+    DuckDB.register_data_frame(con, df, table * "_new")
+    try
+        DBInterface.execute(con, "CREATE OR REPLACE TABLE $table AS SELECT * FROM $(table)_new")
+    finally
+        DuckDB.unregister_data_frame(con, table * "_new")
+    end
+end
+
+"""
+    compute_hazard_national() -> nothing
+
+Compute the national annual hazard values from the ERA5 grids
+(`HazardTransform.hazard_country_year`) and write them to the table
+`hazard_national` of the raw database, from which `transform_data("hazard")`
+makes the processed table. Needs every grid year 1950-2025 in
+`HazardDataFetch.GRID_DIR`; bands already done are taken from their
+checkpoints.
+"""
+function compute_hazard_national()
+    national = HazardTransform.hazard_country_year()
+    DatabaseAccess.with_connection(DB_PATH_RAW) do con
+        write_table_as_is!(con, national, "hazard_national")
+        DatabaseAccess.update_metadata!(con, "hazard_national", START_YEAR, END_YEAR,
+            HAZARD_NATIONAL_SOURCE)
+    end
+    logmsg("Wrote $(nrow(national)) rows to table hazard_national in $DB_PATH_RAW.")
+    return nothing
+end
+
 function transform_data(table::String)
     if table == "damage"
         # Process the "damage" table, with each event assigned to the
@@ -206,12 +244,16 @@ function transform_data(table::String)
                 START_YEAR, END_YEAR, "derived from raw exposure table")
         end
     elseif table == "hazard"
-        # Process the "hazard" table
-        H_processed = DatabaseAccess.executePRQL(DB_PATH_RAW, "src/DataTransform/hazard_country_year.prql")
+        # Process the national hazard values of the raw database (see
+        # compute_hazard_national); adjustments for the processed database
+        # go in the PRQL step
+        H_processed = DatabaseAccess.executePRQL(DB_PATH_RAW,
+            "src/DataTransform/hazard_country_year.prql")
+        nrow(H_processed) > 0 || error("The hazard PRQL step returned no rows; nothing written.")
         DatabaseAccess.with_connection(DB_PATH_PROCESSED) do con
-            DatabaseAccess.write_duckdb_table!(H_processed, con, "hazard_country_year")
+            write_table_as_is!(con, H_processed, "hazard_country_year")
             DatabaseAccess.update_metadata!(con, "hazard_country_year",
-                START_YEAR, END_YEAR, "derived from raw hazard table")
+                START_YEAR, END_YEAR, "derived from raw hazard_national table")
         end
     else
         println("Table name not recognized. Please provide a valid table name.")
