@@ -354,6 +354,15 @@ function gpkg_geometry(blob::Vector{UInt8})
     return LibGEOS.readgeom(blob[9 + envelope:end])
 end
 
+# A unit of the map: its country code, its outline and bounding box, and, for
+# a unit taken from GADM's regional level, the code of the country whose
+# outline contains it.
+function unit_feature(code::String, geom, parent::Union{Nothing, String} = nothing)
+    box = GeoInterface.extent(geom)
+    return (iso3 = code, geom = geom, parent = parent,
+            left = box.X[1], right = box.X[2], bottom = box.Y[1], top = box.Y[2])
+end
+
 function load_unit_features()
     units = CSV.read(HAZARD_UNITS_PATH, DataFrame; types = String)
     code_of = Dict(row.gadm_code => coalesce(row.code, "") for row in eachrow(units))
@@ -361,8 +370,7 @@ function load_unit_features()
     features = []
     try
         # Units taken from GADM's regional level (Hong Kong, Macao) lie inside
-        # a country polygon, so they come first: the first feature that
-        # contains a cell wins.
+        # a country's outline; their area is taken off that country's.
         level1 = [gid for gid in keys(code_of) if occursin('.', gid)]
         rows = vcat(
             DataFrame(DBInterface.execute(db,
@@ -375,11 +383,8 @@ function load_unit_features()
             haskey(code_of, row.gid) || error("GADM unit $(row.gid) missing from $HAZARD_UNITS_PATH")
             code = code_of[row.gid]
             isempty(code) && continue  # not a country (the Caspian Sea, Antarctica)
-            geom = gpkg_geometry(Vector{UInt8}(row.geom))
-            box = GeoInterface.extent(geom)
-            push!(features, (iso3 = code, prepared = LibGEOS.prepareGeom(geom),
-                             left = box.X[1], right = box.X[2],
-                             bottom = box.Y[1], top = box.Y[2]))
+            parent = occursin('.', row.gid) ? code_of[first(split(row.gid, '.'))] : nothing
+            push!(features, unit_feature(code, gpkg_geometry(Vector{UInt8}(row.geom)), parent))
         end
     finally
         close(db)
@@ -390,11 +395,14 @@ end
 """
     get_unit_assignment(nc_path) -> Dict{String, NamedTuple}
 
-Assign every grid cell of the NetCDF file's lon/lat grid to a country of the
-map shared with damage and exposure, by point-in-polygon test of the cell's
-centre. Returns a Dict mapping each country code to (cells, weights), where
-cells are CartesianIndex{2} into the (lon, lat) arrays and weights are
-cos(latitude) area weights. Cells in no country (sea) are left out.
+Assign the grid cells of the NetCDF file's lon/lat grid to the countries of
+the map shared with damage and exposure. A cell counts for every country it
+overlaps, in proportion to the share of its area inside that country, so a
+cell on a border counts in part for each neighbour and a coastal cell only for
+its land. Returns a Dict mapping each country code to (cells, weights), where
+cells are CartesianIndex{2} into the (lon, lat) arrays and weights are each
+cell's share in the country times cos(latitude), its area weight. Cells in no
+country (sea) are left out.
 
 The assignment is computed once and cached as CSV. The cache is keyed by the
 merge table's content, so editing the table forces a new assignment.
@@ -405,7 +413,7 @@ function get_unit_assignment(nc_path::String)
     end
 
     key = string(hash(read(HAZARD_UNITS_PATH)); base = 16)
-    cache_path = joinpath(DATA_DIR, "grid_unit_assignment_$(length(lon))x$(length(lat))_$key.csv")
+    cache_path = joinpath(DATA_DIR, "grid_unit_shares_$(length(lon))x$(length(lat))_$key.csv")
     if isfile(cache_path)
         df = CSV.read(cache_path, DataFrame; types = Dict(:iso3 => String))
         return build_country_cells(df, lat)
@@ -413,41 +421,130 @@ function get_unit_assignment(nc_path::String)
 
     logmsg("Assigning grid cells to GADM-based countries (done once, may take a while)...")
     mkpath(DATA_DIR)
-    df = assign_cells(lon, lat, load_unit_features())
+    df = unit_shares(lon, lat, load_unit_features())
     CSV.write(cache_path, df)
-    logmsg("Assigned $(nrow(df)) land cells to $(length(unique(df.iso3))) countries.")
+    logmsg("Assigned $(length(unique(zip(df.lon_idx, df.lat_idx)))) land cells to " *
+           "$(length(unique(df.iso3))) countries.")
     return build_country_cells(df, lat)
 end
 
-# Assign each grid cell to the first feature that contains its centre. Cells
-# in no feature (sea) are left out.
-function assign_cells(lon::Vector{Float64}, lat::Vector{Float64}, features)
-    lon_idx = Int[]
-    lat_idx = Int[]
-    iso3 = String[]
-    for (j, λ) in enumerate(lon)
-        x = λ > 180 ? λ - 360 : λ  # ERA5 uses 0..360, the maps -180..180
-        for (i, φ) in enumerate(lat)
-            point = LibGEOS.Point(x, φ)
-            for f in features
-                if f.left <= x <= f.right && f.bottom <= φ <= f.top &&
-                   LibGEOS.intersects(f.prepared, point)
-                    push!(lon_idx, j)
-                    push!(lat_idx, i)
-                    push!(iso3, f.iso3)
-                    break
-                end
-            end
+# Grid cells are 0.25° on a side, centred on the grid's coordinates
+const CELL = 0.25
+
+# Shares below this are dropped: slivers of a few hundred square metres, from
+# outlines that do not quite meet, would otherwise add cells to compute.
+const MIN_SHARE = 1e-6
+
+# The rectangle of the grid cells in columns ks and rows is, shifted east by
+# `shift` degrees. `x` holds the columns' longitudes from west to east, `y` the
+# rows' latitudes from north to south.
+function cell_box(x, y, ks::UnitRange{Int}, is::UnitRange{Int}, shift::Float64)
+    w, e = x[first(ks)] - CELL / 2 + shift, x[last(ks)] + CELL / 2 + shift
+    n, s = y[first(is)] + CELL / 2, y[last(is)] - CELL / 2
+    return LibGEOS.Polygon([[[w, s], [e, s], [e, n], [w, n], [w, s]]])
+end
+
+function clip(geom, box)
+    try
+        return LibGEOS.intersection(geom, box)
+    catch err
+        err isa LibGEOS.GEOSError || rethrow()
+        return LibGEOS.intersection(LibGEOS.makeValid(geom), box)
+    end
+end
+
+# Add to `shares` the share of each cell of columns ks and rows is covered by
+# `geom`, already clipped to those cells. The rectangle is halved until it is
+# one cell, or wholly covered, clipping the outline at each step, so an
+# outline is never intersected whole with a single cell.
+function add_shares!(shares::Dict{Tuple{Int, Int}, Float64}, geom, x, y,
+                     ks::UnitRange{Int}, is::UnitRange{Int}, shift::Float64)
+    LibGEOS.isEmpty(geom) && return
+    area = LibGEOS.area(geom)
+    area > 0 || return
+    if area >= length(ks) * length(is) * CELL^2 * (1 - 1e-9)
+        for k in ks, i in is
+            shares[(k, i)] = get(shares, (k, i), 0.0) + 1.0
+        end
+    elseif length(ks) == 1 && length(is) == 1
+        shares[(first(ks), first(is))] = get(shares, (first(ks), first(is)), 0.0) + area / CELL^2
+    elseif length(ks) >= length(is)
+        m = first(ks) + length(ks) ÷ 2 - 1
+        for h in (first(ks):m, m + 1:last(ks))
+            add_shares!(shares, clip(geom, cell_box(x, y, h, is, shift)), x, y, h, is, shift)
+        end
+    else
+        m = first(is) + length(is) ÷ 2 - 1
+        for h in (first(is):m, m + 1:last(is))
+            add_shares!(shares, clip(geom, cell_box(x, y, ks, h, shift)), x, y, ks, h, shift)
         end
     end
-    return DataFrame(lon_idx = lon_idx, lat_idx = lat_idx, iso3 = iso3)
+end
+
+"""
+    unit_shares(lon, lat, features) -> DataFrame
+
+The share of each grid cell's area inside each country, from the outlines in
+`features`, as rows of `lon_idx`, `lat_idx` (into `lon` and `lat`), `iso3` and
+`fraction`. Units with the same code are added together, and a regional unit
+is taken off the country that contains it. Longitudes may run 0..360, as in
+ERA5, or -180..180.
+"""
+function unit_shares(lon::Vector{Float64}, lat::Vector{Float64}, features)
+    # Columns from west to east in map longitudes; the column at 180° spans
+    # the antimeridian
+    xs = [λ > 180 ? λ - 360 : λ for λ in lon]
+    order = sortperm(xs)
+    x = xs[order]
+    rows = sortperm(lat; rev = true)
+    y = lat[rows]
+    by_code = Dict{String, Dict{Tuple{Int, Int}, Float64}}()
+    regional = Tuple{String, String, Dict{Tuple{Int, Int}, Float64}}[]
+    for f in features
+        shares = Dict{Tuple{Int, Int}, Float64}()
+        k1 = max(1, searchsortedfirst(x, f.left - CELL / 2))
+        k2 = min(length(x), searchsortedlast(x, f.right + CELL / 2))
+        i1 = something(findfirst(<=(f.top + CELL / 2), y), length(y) + 1)
+        i2 = something(findlast(>=(f.bottom - CELL / 2), y), 0)
+        if i1 <= i2
+            if k1 <= k2
+                box = cell_box(x, y, k1:k2, i1:i2, 0.0)
+                add_shares!(shares, clip(f.geom, box), x, y, k1:k2, i1:i2, 0.0)
+            end
+            # Land west of the first column's edge lies in the last column,
+            # across the antimeridian
+            if f.left < x[1] - CELL / 2 && x[end] + CELL / 2 > 180
+                last_col = length(x):length(x)
+                add_shares!(shares, clip(f.geom, cell_box(x, y, last_col, i1:i2, -360.0)),
+                            x, y, last_col, i1:i2, -360.0)
+            end
+        end
+        total = get!(Dict{Tuple{Int, Int}, Float64}, by_code, f.iso3)
+        for (c, v) in shares
+            total[c] = get(total, c, 0.0) + v
+        end
+        f.parent === nothing || push!(regional, (f.iso3, f.parent, shares))
+    end
+    for (_, parent, shares) in regional
+        total = by_code[parent]
+        for (c, v) in shares
+            haskey(total, c) && (total[c] = max(0.0, total[c] - v))
+        end
+    end
+    lon_idx, lat_idx, iso3, fraction = Int[], Int[], String[], Float64[]
+    for code in sort!(collect(keys(by_code))), ((k, i), v) in sort!(collect(by_code[code]))
+        v >= MIN_SHARE || continue
+        push!(lon_idx, order[k]); push!(lat_idx, rows[i]); push!(iso3, code)
+        push!(fraction, min(v, 1.0))
+    end
+    return DataFrame(lon_idx = lon_idx, lat_idx = lat_idx, iso3 = iso3, fraction = fraction)
 end
 
 function build_country_cells(df::DataFrame, lat::Vector{Float64})
     countries = Dict{String, NamedTuple{(:cells, :weights), Tuple{Vector{CartesianIndex{2}}, Vector{Float64}}}}()
     for group in groupby(df, :iso3)
         cells = [CartesianIndex(r.lon_idx, r.lat_idx) for r in eachrow(group)]
-        weights = [cosd(lat[r.lat_idx]) for r in eachrow(group)]
+        weights = [r.fraction * cosd(lat[r.lat_idx]) for r in eachrow(group)]
         countries[group.iso3[1]] = (cells = cells, weights = weights)
     end
     return countries

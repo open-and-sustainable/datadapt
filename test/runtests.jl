@@ -546,7 +546,8 @@ end
     T2 = fill(NaN, n)
     T2[400] = 5.0
     results = [result([1, 2], T1), result([2, 400], T2), result(Int[], fill(NaN, n))]
-    daily, peak = HT.band_partials(results, ["AAA", "AAA", "BBB"], [1.0, 0.5, 2.0], dates, 1:n)
+    daily, peak = HT.band_partials(results, [["AAA" => 1.0], ["AAA" => 0.5], ["BBB" => 2.0]],
+                                   dates, 1:n)
 
     @testset "band partials" begin
         flood = daily[daily.event_type .== "Flood", :]
@@ -557,6 +558,15 @@ end
         @test pf.country_code == ["AAA", "AAA"] && pf.year == [1980, 1981]
         @test pf.peak_return_period_years == [0.1, 5.0]
         @test !("BBB" in daily.country_code) && !("BBB" in peak.country_code)
+    end
+
+    @testset "a cell on a border counts for each country" begin
+        d2, p2 = HT.band_partials([result([1, 2], T1)], [["AAA" => 0.25, "BBB" => 0.75]], dates, 1:n)
+        flood = d2[d2.event_type .== "Flood", :]
+        @test flood.country_code == ["AAA", "AAA", "BBB", "BBB"]
+        @test flood.extreme_area == [0.25, 0.25, 0.75, 0.75]
+        pf = p2[(p2.event_type .== "Flood") .& (p2.year .== 1980), :]
+        @test pf.country_code == ["AAA", "BBB"] && pf.peak_return_period_years == [0.1, 0.1]
     end
 
     @testset "national values" begin
@@ -610,15 +620,14 @@ end
             write_grid(dir, src, y, lon, lat, (i, j, d) -> g())
         end
         cells = [CartesianIndex(1, 2), CartesianIndex(2, 2), CartesianIndex(1, 3)]
-        countries = ["AAA", "AAA", "BBB"]
-        areas = cosd.([59.75, 59.75, 59.5])
+        shares = [["AAA" => cosd(59.75)], ["AAA" => cosd(59.75)], ["BBB" => cosd(59.5)]]
         kw = (years = 1950:1954, baseline = 1950:1952, main = 1953:1954, chunk_cells = 2)
-        @test HT.run_band(dir, out, 2:3, cells, countries, areas; kw...)
+        @test HT.run_band(dir, out, 2:3, cells, shares; kw...)
         @test HT.band_done(out, 2:3)
         band = joinpath(out, HT.band_name(2:3))
         @test sort(filter(endswith(".done"), readdir(band))) == ["cells_1-2.done", "cells_3-3.done"]
         # A band already done is skipped
-        @test !HT.run_band(dir, out, 2:3, cells, countries, areas; kw...)
+        @test !HT.run_band(dir, out, 2:3, cells, shares; kw...)
         country_areas = DataFrame(country_code = ["AAA", "BBB"], area = [2cosd(59.75), cosd(59.5)])
         tab = HT.combine_bands(out, [2:3], country_areas; main = 1953:1954)
         # A stop during the second chunk: only that chunk is computed again,
@@ -627,7 +636,7 @@ end
         rm(joinpath(band, "cells_3-3.done"))
         rm(joinpath(band, "cells_3-3_daily.parquet"))
         first_chunk = mtime(joinpath(band, "cells_1-2_daily.parquet"))
-        @test HT.run_band(dir, out, 2:3, cells, countries, areas; kw...)
+        @test HT.run_band(dir, out, 2:3, cells, shares; kw...)
         @test mtime(joinpath(band, "cells_1-2_daily.parquet")) == first_chunk
         @test isfile(joinpath(band, "cells_3-3_daily.parquet"))
         tab2 = HT.combine_bands(out, [2:3], country_areas; main = 1953:1954)
@@ -660,6 +669,33 @@ end
 end
 
 @testset "Tables and country codes" begin
+    @testset "cells shared by area" begin
+        geom = DatAdapt.HazardDataFetch.LibGEOS.readgeom
+        unit(code, wkt, parent = nothing) = HDF.unit_feature(code, geom(wkt), parent)
+        share(df, code, j, i) = sum(df.fraction[(df.iso3 .== code) .& (df.lon_idx .== j) .& (df.lat_idx .== i)]; init = 0.0)
+        lon, lat = [0.0, 0.25, 0.5, 0.75], [1.0, 0.75, 0.5, 0.25, 0.0]
+        df = HDF.unit_shares(lon, lat, [
+            # A whole cell column and half of the next one
+            unit("AAA", "POLYGON((0.125 0.375, 0.5 0.375, 0.5 0.875, 0.125 0.875, 0.125 0.375))"),
+            # A regional unit inside AAA, a quarter of one cell
+            unit("RRR", "POLYGON((0.125 0.75, 0.25 0.75, 0.25 0.875, 0.125 0.875, 0.125 0.75))", "AAA"),
+            # An island far smaller than a cell, around no cell's centre
+            unit("III", "POLYGON((0.02 0.02, 0.07 0.02, 0.07 0.07, 0.02 0.07, 0.02 0.02))")])
+        @test share(df, "AAA", 2, 3) ≈ 1.0 && share(df, "AAA", 3, 3) ≈ 0.5 && share(df, "AAA", 3, 2) ≈ 0.5
+        @test share(df, "AAA", 2, 2) ≈ 0.75 && share(df, "RRR", 2, 2) ≈ 0.25
+        @test share(df, "III", 1, 5) ≈ 0.04
+        @test nrow(df) == 6
+        # Land either side of the antimeridian goes to the cell centred on 180°
+        df = HDF.unit_shares([179.5, 179.75, 180.0], [0.25, 0.0], [
+            unit("FJI", "MULTIPOLYGON(((-180 0, -179.95 0, -179.95 0.1, -180 0.1, -180 0)), " *
+                        "((179.9 0, 180 0, 180 0.1, 179.9 0.1, 179.9 0)))")])
+        @test nrow(df) == 1 && df.lon_idx == [3] && df.lat_idx == [2]
+        @test df.fraction[1] ≈ (0.05 + 0.1) * 0.1 / 0.0625
+        # Weights are each cell's share times its area weight
+        w = HDF.build_country_cells(DataFrame(lon_idx = [1], lat_idx = [1], iso3 = ["AAA"], fraction = [0.5]), [60.0])
+        @test w["AAA"].weights ≈ [0.5 * cosd(60.0)]
+    end
+
     @testset "table writer keeps column types" begin
         DB = DatAdapt.DatabaseAccess
         con = DatAdapt.DuckDB.DB()

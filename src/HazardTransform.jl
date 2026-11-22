@@ -1215,26 +1215,26 @@ function classify_cell(fits::AbstractDict, series::AbstractDict, draws::Abstract
 end
 
 """
-    band_partials(results, countries, areas, dates, days) -> (daily, peak)
+    band_partials(results, shares, dates, days) -> (daily, peak)
 
 A band's share of the national values. `results` holds `classify_cell`'s
-output for each cell, `countries` and `areas` each cell's country code and
-area weight. `daily` has the area in joint extreme per country, day and
-event type, only where it is above zero; `peak` has the highest return period
-per country, year and event type, only where one is defined.
+output for each cell, and `shares` each cell's countries, as pairs of country
+code and the cell's area weight in that country; a cell on a border counts for
+each of its countries. `daily` has the area in joint extreme per country, day
+and event type, only where it is above zero; `peak` has the highest return
+period per country, year and event type, over every cell the country shares
+in, only where one is defined.
 """
-function band_partials(results::AbstractVector, countries::AbstractVector{String},
-                       areas::AbstractVector{Float64}, dates::Vector{Date},
-                       days::AbstractVector{Int})
+function band_partials(results::AbstractVector, shares::AbstractVector,
+                       dates::Vector{Date}, days::AbstractVector{Int})
     n = length(days)
     day_years = year.(dates[days])
     years = unique(day_years)
     year_index = day_years .- first(years) .+ 1
     acc = Dict{Tuple{String, String}, Tuple{Vector{Float64}, Vector{Float64}}}()
-    for (k, res) in enumerate(results), e in EVENT_TYPES
-        area, peak = get!(() -> (zeros(n), fill(NaN, length(years))), acc, (countries[k], e.name))
+    for (k, res) in enumerate(results), (country, a) in shares[k], e in EVENT_TYPES
+        area, peak = get!(() -> (zeros(n), fill(NaN, length(years))), acc, (country, e.name))
         r = res[e.name]
-        a = areas[k]
         @inbounds for t in 1:n
             r.extreme[t] && (area[t] += a)
             T = r.T[t]
@@ -1284,12 +1284,12 @@ chunk_done(dir::String, r::UnitRange{Int}) = isfile(joinpath(dir, chunk_name(r) 
 cell_chunks(n::Int, size::Int) = [i:min(i + size - 1, n) for i in 1:size:n]
 
 """
-    run_band(grid_dir, out_dir, rows, cells, countries, areas;
+    run_band(grid_dir, out_dir, rows, cells, shares;
              years = RECORD_YEARS, baseline = BASELINE_YEARS, main = MAIN_YEARS,
              chunk_cells = CHUNK_CELLS) -> Bool
 
 All three stages for the cells of one latitude band (`rows`), with each cell's
-country code and area weight. The cells are taken in chunks of `chunk_cells`;
+countries and area weights in them (`shares`, as in `band_partials`). The cells are taken in chunks of `chunk_cells`;
 each chunk's two tables of `band_partials` go to Parquet files in the band's
 folder of `out_dir`, followed by a `.done` marker for the chunk, and a marker
 for the band once every chunk is done. A band already done is skipped, and
@@ -1297,8 +1297,8 @@ for the band once every chunk is done. A band already done is skipped, and
 are fitted in parallel on Julia's threads.
 """
 function run_band(grid_dir::String, out_dir::String, rows::UnitRange{Int},
-                  cells::Vector{CartesianIndex{2}}, countries::Vector{String},
-                  areas::Vector{Float64}; years::UnitRange{Int} = RECORD_YEARS,
+                  cells::Vector{CartesianIndex{2}}, shares::AbstractVector;
+                  years::UnitRange{Int} = RECORD_YEARS,
                   baseline::UnitRange{Int} = BASELINE_YEARS,
                   main::UnitRange{Int} = MAIN_YEARS, chunk_cells::Int = CHUNK_CELLS)
     band_done(out_dir, rows) && return false
@@ -1326,7 +1326,7 @@ function run_band(grid_dir::String, out_dir::String, rows::UnitRange{Int},
                     rethrow()
                 end
             end
-            daily, peak = band_partials(results, countries[r], areas[r], dates, days)
+            daily, peak = band_partials(results, shares[r], dates, days)
             base = joinpath(dir, chunk_name(r))
             for (df, suffix) in ((daily, "_daily.parquet"), (peak, "_peak.parquet"))
                 write_parquet(df, base * suffix * ".tmp")
@@ -1345,25 +1345,27 @@ end
     land_bands(grid_dir; band_rows = 4) -> (bands, assignment)
 
 The latitude bands of `band_rows` grid rows that hold land cells, each as a
-named tuple of its `rows` and its `cells` with their `countries` and `areas`,
-from the assignment of grid cells to countries on the map shared with damage
-and exposure (also returned).
+named tuple of its `rows`, its `cells` and their `shares` (each cell's
+countries and area weights in them), from the assignment of grid cells to
+countries on the map shared with damage and exposure (also returned).
 """
 function land_bands(grid_dir::String; band_rows::Int = 4)
     first_grid = grid_path(grid_dir, first(all_sources()), first(RECORD_YEARS))
     assignment = get_unit_assignment(first_grid)
     n_lat = NCDataset(ds -> length(ds["latitude"]), first_grid)
-    cell_country = Dict{CartesianIndex{2}, Tuple{String, Float64}}()
-    for (code, v) in assignment, (c, w) in zip(v.cells, v.weights)
-        cell_country[c] = (code, w)
+    cell_shares = Dict{CartesianIndex{2}, Vector{Pair{String, Float64}}}()
+    for code in sort!(collect(keys(assignment)))
+        v = assignment[code]
+        for (c, w) in zip(v.cells, v.weights)
+            push!(get!(Vector{Pair{String, Float64}}, cell_shares, c), code => w)
+        end
     end
     bands = NamedTuple[]
     for r in 1:band_rows:n_lat
         rows = r:min(r + band_rows - 1, n_lat)
-        cells = sort!([c for c in keys(cell_country) if c[2] in rows])
+        cells = sort!([c for c in keys(cell_shares) if c[2] in rows])
         isempty(cells) && continue
-        push!(bands, (rows = rows, cells = cells, countries = [cell_country[c][1] for c in cells],
-                      areas = [cell_country[c][2] for c in cells]))
+        push!(bands, (rows = rows, cells = cells, shares = [cell_shares[c] for c in cells]))
     end
     return bands, assignment
 end
@@ -1405,7 +1407,7 @@ function run_bands(run_id::String; grid_dir::String = GRID_DIR, out_dir::String 
     for b in bands
         band_done(out_dir, b.rows) && continue
         claim_band(out_dir, b.rows, run_id) || continue
-        run_band(grid_dir, out_dir, b.rows, b.cells, b.countries, b.areas)
+        run_band(grid_dir, out_dir, b.rows, b.cells, b.shares)
         n += 1
     end
     left = count(b -> !band_done(out_dir, b.rows), bands)
@@ -1418,7 +1420,7 @@ end
 
 The national values (manual, Step 4) from the checkpoints of every band in
 `bands`, which must all be done. `country_areas` has each country's code and
-total area weight A over all its cells. One row per country, year of `main`
+total area weight A, the sum of its cells' area weights in it. One row per country, year of `main`
 and event type, with `extreme_area_days`, `peak_extent` and
 `peak_return_period_years` (missing where the type cannot occur).
 """

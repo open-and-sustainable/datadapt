@@ -224,13 +224,15 @@ Boero et al.'s two elliptical families, Gaussian and Student's t, were considere
 
 Each country, year and event type gets three values, computed from the per-cell, per-day joint extremes of Step 3. None of them averages indicator values or intensities across cells, so an extreme in one part of a country is not diluted by the rest of it.
 
-**Cells are weighted by their real surface area.** All cells are 0.25° × 0.25°, but their area in km² shrinks towards the poles in proportion to the cosine of latitude. A cell at 60°N, for example, covers about half the area of one at the equator. Each cell is assigned to the country that contains its centre (`assign_cells` in `src/HazardDataFetch.jl`). Each day counts in its own calendar year (Step 2).
+**Cells are weighted by their real surface area.** All cells are 0.25° × 0.25°, but their area in km² shrinks towards the poles in proportion to the cosine of latitude. A cell at 60°N, for example, covers about half the area of one at the equator.
 
-**The three values.** Let aᵢ be the area of cell i and A = Σᵢ aᵢ the area of all the country's cells. Let Eᵢ,d be 1 when cell i is in a joint extreme on day d, and 0 otherwise.
+**A cell counts for every country it overlaps.** Each cell counts for a country in proportion to the share of its area inside the country's outline (`unit_shares` in `src/HazardDataFetch.jl`). A cell on a border counts in part for each neighbour, and a coastal cell only for its land. Every country therefore has cells, however small it is: Malta, which no cell's centre falls in, lies across parts of several cells. The share only attributes a cell's results to countries: the cell's extremes and return periods are those of the whole cell. Each day counts in its own calendar year (Step 2).
+
+**The three values.** Let aᵢ be the area of cell i inside the country, its area times its share in the country, and A = Σᵢ aᵢ the country's area over all its cells. Let Eᵢ,d be 1 when cell i is in a joint extreme on day d, and 0 otherwise.
 
 1. **Extreme area-days**, Σ_d Σᵢ aᵢ Eᵢ,d / A: how much of the country was hit, and for how many days, summed over the year. It is measured in days. A value of 10 is the equivalent of the whole country in a joint extreme for 10 days, or of half the country for 20 days.
 2. **Peak extent**, max_d Σᵢ aᵢ Eᵢ,d / A: the largest share of the country in a joint extreme on a single day, from 0 to 1.
-3. **Peak intensity**, maxᵢ,d Tᵢ,d: how extreme the worst cell-day of the year was, compared with that cell's baseline, given as a return period in years.
+3. **Peak intensity**, maxᵢ,d Tᵢ,d over every cell with a share in the country: how extreme the worst cell-day of the year was, compared with that cell's baseline, given as a return period in years.
 
 **Rarity is taken from the fitted copula.** A day's return period in cell i is Tᵢ,d = 1 / (365.25 × (1 − K_C(cᵢ,d))) years, which is the Kendall return period of Salvadori et al. (2011) applied to daily values. K_C is the cell's Kendall distribution from Step 3. A value of 200 means that a day at least this extreme occurred in that cell, at the baseline frequency, once every 200 years on average. Ranking the day among the cell's baseline days was considered and rejected. It would stop at the worst baseline day, the same problem that ruled out empirical ranks for the marginals (Step 3). The joint-extreme threshold of Step 3 uses the same fitted copula, so the threshold and the rarity are consistent. A joint extreme (K_C > 0.95) corresponds to a return period above 1 / (365.25 × 0.05) ≈ 0.055 years, about 20 days.
 
