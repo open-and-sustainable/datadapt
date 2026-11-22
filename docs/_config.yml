@@ -3,8 +3,8 @@ description: "Hazard, damage and exposure data by country and year, 1980–2025"
 baseurl: "/datadapt"
 url: "https://open-and-sustainable.github.io"
 github_repo: "https://github.com/open-and-sustainable/datadapt"
-logo: "/assets/images/DatAdapt_logo_small.png"
-favicon: "/assets/images/DatAdapt_logo_vsmall.png"
+logo: "https://raw.githubusercontent.com/open-and-sustainable/datadapt/main/logo/DatAdapt_logo_small.png"
+favicon: "https://raw.githubusercontent.com/open-and-sustainable/datadapt/main/logo/DatAdapt_logo_vsmall.png"
 remote_theme: Open-and-Sustainable/greendoc_theme
 
 markdown: kramdown
