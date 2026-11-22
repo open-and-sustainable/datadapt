@@ -24,3 +24,5 @@ nav_links:
     url: "/processed/damage.html"
   - name: "/Processed/Exposure"
     url: "/processed/exposure.html"
+  - name: "/Database"
+    url: "https://git.nilu.no/ribo/DatAdapt-database"

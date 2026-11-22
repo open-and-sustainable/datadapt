@@ -1,10 +1,7 @@
 # ![DatAdapt_logo](docs/assets/images/DatAdapt_logo_vsmall.png) DatAdapt
 
-## Project Description
-https://doi.org/10.17605/OSF.IO/DWH98
-
-## Documentation
-https://open-and-sustainable.github.io/datadapt/
+[![DOI](https://img.shields.io/badge/DOI-10.17605%2FOSF.IO%2FDWH98-blue.svg)](https://doi.org/10.17605/OSF.IO/DWH98)
+[![Documentation](https://img.shields.io/badge/docs-website-green.svg)](https://open-and-sustainable.github.io/datadapt/)
 
 ## License
 The software in this repository is licensed under the [MIT license](LICENSE).

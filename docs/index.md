@@ -17,7 +17,7 @@ The project is registered at the OSF, [doi:10.17605/OSF.IO/DWH98](https://doi.or
 
 ## Raw and processed data
 
-The data come in two DuckDB databases, distributed separately from the code in the dataset repository `DatAdapt-database`, which the pipeline expects in the root of this repository.
+The data come in two DuckDB databases, distributed separately from the code in the dataset repository [DatAdapt-database](https://git.nilu.no/ribo/DatAdapt-database), which the pipeline expects in the root of this repository.
 
 | Database | Tables | Content |
 |---|---|---|
