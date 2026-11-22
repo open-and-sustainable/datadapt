@@ -739,31 +739,323 @@ return_period_years(C::Archimedean, c::Float64) = 1 / (365.25 * (1 - kendall(C, 
 const COPULA_FAMILIES = (:clayton => Copulas.ClaytonCopula, :frank => Copulas.FrankCopula,
                          :gumbel => Copulas.GumbelCopula, :joe => Copulas.JoeCopula)
 
+# The largest θ searched. Every family is then close to complete dependence
+# (Kendall's τ of 0.98 for Frank, above 0.99 for the others), and the Frank
+# Kendall distribution stays within floating-point range.
+const THETA_MAX = 200.0
+# The smallest step from a bound of θ, or from independence, searched.
+const THETA_STEP = 1e-6
+# Points of the coarse scan of θ before it is refined.
+const THETA_GRID = 24
+
+"""
+    theta_range(family, d) -> (θ, lo, hi)
+
+The values of θ searched for a family in dimension `d`: θ(x) for x in
+[lo, hi]. The whole range Copulas.jl allows is covered, up to `THETA_MAX`:
+θ > -1/(d - 1) for Clayton, any θ for Frank in two dimensions and θ ≥ 0 in
+more, θ ≥ 1 for Gumbel and Joe. On x the likelihood varies about evenly from
+near independence to near complete dependence.
+"""
+function theta_range(family::Symbol, d::Int)
+    if family === :clayton
+        b = 1 / (d - 1)
+        return (x -> exp(x) - b, log(THETA_STEP), log(THETA_MAX + b))
+    elseif family === :frank && d == 2
+        return (sinh, -asinh(THETA_MAX), asinh(THETA_MAX))
+    elseif family === :frank
+        return (exp, log(THETA_STEP), log(THETA_MAX))
+    elseif family === :gumbel || family === :joe
+        return (x -> 1 + exp(x), log(THETA_STEP), log(THETA_MAX - 1))
+    end
+    error("Unknown copula family $family")
+end
+
+"""
+    brent_minimum(f, a, b, x, fx; tol = 1e-8) -> (x, f(x))
+
+The minimum of `f` on [a, b] by Brent's method, starting from a point `x` in
+[a, b] where f is `fx` and no higher than at a and b: parabolic interpolation,
+with a golden-section step whenever the parabola cannot be trusted.
+"""
+function brent_minimum(f, a::Float64, b::Float64, x::Float64, fx::Float64;
+                       tol::Float64 = 1e-8)
+    g = (3 - sqrt(5)) / 2
+    w = v = x
+    fw = fv = fx
+    d = e = 0.0
+    for _ in 1:200
+        m = (a + b) / 2
+        tol1 = tol * abs(x) + 1e-10
+        tol2 = 2tol1
+        abs(x - m) <= tol2 - (b - a) / 2 && break
+        golden = true
+        if abs(e) > tol1
+            r = (x - w) * (fx - fv)
+            q = (x - v) * (fx - fw)
+            p = (x - v) * q - (x - w) * r
+            q = 2(q - r)
+            q > 0 ? (p = -p) : (q = -q)
+            if abs(p) < abs(q * e / 2) && p > q * (a - x) && p < q * (b - x)
+                e, d = d, p / q
+                u = x + d
+                (u - a < tol2 || b - u < tol2) && (d = x < m ? tol1 : -tol1)
+                golden = false
+            end
+        end
+        if golden
+            e = x < m ? b - x : a - x
+            d = g * e
+        end
+        u = abs(d) >= tol1 ? x + d : x + (d > 0 ? tol1 : -tol1)
+        fu = f(u)
+        if fu <= fx
+            u < x ? (b = x) : (a = x)
+            v, fv, w, fw, x, fx = w, fw, x, fx, u, fu
+        else
+            u < x ? (a = u) : (b = u)
+            if fu <= fw || w == x
+                v, fv, w, fw = w, fw, u, fu
+            elseif fu <= fv || v == x || v == w
+                v, fv = u, fu
+            end
+        end
+    end
+    return x, fx
+end
+
+"The coordinate x of `theta_range` at which a family takes the value θ, kept within the range searched."
+function theta_coordinate(family::Symbol, d::Int, θ::Float64)
+    _, lo, hi = theta_range(family, d)
+    x = if family === :clayton
+        log(max(θ + 1 / (d - 1), THETA_STEP))
+    elseif family === :frank && d == 2
+        asinh(θ)
+    elseif family === :frank
+        log(max(θ, THETA_STEP))
+    else
+        log(max(θ - 1, THETA_STEP))
+    end
+    return clamp(x, lo, hi)
+end
+
+# log(1 - eˣ) for x < 0, and log(eʸ - 1) for y > 0, accurate at both ends
+log1mexp(x::Float64) = x < -0.6931471805599453 ? log1p(-exp(x)) : log(-expm1(x))
+logexpm1(y::Float64) = y > 18 ? y + log1p(-exp(-y)) : log(expm1(y))
+# log|e^(-v) - 1| and log|eᵛ - 1| for v of either sign
+log_abs_expm1_neg(v::Float64) = v > 0 ? log1mexp(-v) : logexpm1(-v)
+log_abs_expm1(v::Float64) = v > 0 ? logexpm1(v) : log1mexp(v)
+
+"""
+    copula_loglikelihood(family, θ, U) -> Float64
+
+The log-likelihood of an Archimedean copula for `U` (indicators × days, 2 to
+4 indicators), equal to Copulas.jl's but in closed form and without
+allocating. The density of an Archimedean copula with generator ψ is
+
+    c(u) = |ψ⁽ᵈ⁾(s)| Πᵢ |(ψ⁻¹)'(uᵢ)|,  s = Σᵢ ψ⁻¹(uᵢ),
+
+with the derivative ψ⁽ᵈ⁾ written out for each family; for Gumbel and Joe it
+is a polynomial with positive coefficients (Hofert et al., 2012), summed in
+logs. -Inf if a day lies outside the copula's support.
+"""
+function copula_loglikelihood(family::Symbol, θ::Float64, U::AbstractMatrix{Float64})
+    d = size(U, 1)
+    2 <= d <= 4 || error("The copula likelihood is written out for 2 to 4 indicators, not $d")
+    family in (:clayton, :frank) && iszero(θ) && return 0.0  # independence
+    ll = 0.0
+    if family === :clayton
+        c0 = 0.0
+        for k in 1:d-1
+            c0 += log1p(k * θ)
+        end
+        g = 1 / θ + d
+        @inbounds for j in axes(U, 2)
+            # log(1 + θs), where 1 + θs = Σᵢ uᵢ^-θ - (d - 1)
+            amax = -Inf
+            slogu = 0.0
+            for i in 1:d
+                lu = log(U[i, j])
+                slogu += lu
+                amax = max(amax, -θ * lu)
+            end
+            L = if amax <= 50
+                y = 0.0
+                for i in 1:d
+                    y += expm1(-θ * log(U[i, j]))
+                end
+                y > -1 ? log1p(y) : -Inf
+            else
+                t = -(d - 1) * exp(-amax)
+                for i in 1:d
+                    t += exp(-θ * log(U[i, j]) - amax)
+                end
+                amax + log(t)
+            end
+            isfinite(L) || return -Inf
+            ll += c0 - g * L - (θ + 1) * slogu
+        end
+    elseif family === :frank
+        lt = log(abs(θ))
+        le = log_abs_expm1_neg(θ)
+        @inbounds for j in axes(U, 2)
+            s = 0.0
+            dpsi = 0.0
+            for i in 1:d
+                u = U[i, j]
+                s += le - log_abs_expm1_neg(θ * u)
+                dpsi += lt - log_abs_expm1(θ * u)
+            end
+            z = -expm1(-θ) * exp(-s)
+            one_minus_z = -expm1(-s) + exp(-θ - s)
+            q = d == 2 ? 1.0 : d == 3 ? 1 + z : 1 + 4z + z^2
+            ll += -lt + (le - s) + log(q) - d * log(one_minus_z) + dpsi
+        end
+    elseif family === :gumbel
+        a = 1 / θ
+        # Coefficient of xᵏ, k = 1…d, in sᵈ |ψ⁽ᵈ⁾(s)| / ψ(s) with x = s^(1/θ)
+        c = d == 2 ? (a * (1 - a), a^2, 0.0, 0.0) :
+            d == 3 ? (a * (1 - a) * (2 - a), 3a^2 * (1 - a), a^3, 0.0) :
+                     (a * (1 - a) * (2 - a) * (3 - a), a^2 * (1 - a) * (11 - 7a), 6a^3 * (1 - a), a^4)
+        @inbounds for j in axes(U, 2)
+            # log s with s = Σᵢ (-log uᵢ)^θ, summed in logs
+            m = -Inf
+            dpsi = 0.0
+            for i in 1:d
+                u = U[i, j]
+                l = log(-log(u))
+                m = max(m, θ * l)
+                dpsi += log(θ) + (θ - 1) * l - log(u)
+            end
+            t = 0.0
+            for i in 1:d
+                t += exp(θ * log(-log(U[i, j])) - m)
+            end
+            ls = m + log(t)
+            x = exp(a * ls)
+            p = 0.0
+            for k in d:-1:1
+                p = (p + c[k]) * x
+            end
+            ll += -x - d * ls + log(p) + dpsi
+        end
+    elseif family === :joe
+        α = 1 / θ
+        # Coefficient of xᵏ, k = 1…d, in |ψ⁽ᵈ⁾(s)| / (α zᵅ) with z = 1 - e⁻ˢ and
+        # x = e⁻ˢ / z: the Stirling number S(d, k) times (1 - α)(2 - α)…(k - 1 - α)
+        coef = d == 2 ? (1.0, 1 - α, 0.0, 0.0) :
+               d == 3 ? (1.0, 3(1 - α), (2 - α) * (1 - α), 0.0) :
+                        (1.0, 7(1 - α), 6(2 - α) * (1 - α), (3 - α) * (2 - α) * (1 - α))
+        lcoef = map(c -> c > 0 ? log(c) : -Inf, coef)
+        @inbounds for j in axes(U, 2)
+            # log s with s = Σᵢ -log(1 - (1 - uᵢ)^θ), summed in logs
+            m = -Inf
+            dpsi = 0.0
+            for i in 1:d
+                l1u = log1p(-U[i, j])
+                lv = θ * l1u
+                lpsi = lv < -30 ? lv : log(-log1mexp(lv))
+                m = max(m, lpsi)
+                dpsi += log(θ) + lv - l1u - log1mexp(lv)
+            end
+            t = 0.0
+            for i in 1:d
+                lv = θ * log1p(-U[i, j])
+                lpsi = lv < -30 ? lv : log(-log1mexp(lv))
+                t += exp(lpsi - m)
+            end
+            ls = m + log(t)
+            s = exp(ls)
+            lz = s > 1e-8 ? log(-expm1(-s)) : ls + log1p(-s / 2)
+            lx = s > 30 ? -s : s > 1e-8 ? -log(expm1(s)) : -ls - log1p(s / 2)
+            # log of Σₖ coefₖ xᵏ, summed in logs because x can be huge or tiny
+            mp = -Inf
+            for k in 1:d
+                mp = max(mp, lcoef[k] + k * lx)
+            end
+            sp = 0.0
+            for k in 1:d
+                sp += exp(lcoef[k] + k * lx - mp)
+            end
+            ll += log(α) + α * lz + mp + log(sp) + dpsi
+        end
+    else
+        error("Unknown copula family $family")
+    end
+    return isnan(ll) ? -Inf : ll
+end
+
+"""
+    fit_theta(family, U; start = NaN) -> (θ, loglikelihood)
+
+The maximum-likelihood θ of one family for `U` (indicators × days, on the
+probability scale), with the likelihood of `copula_loglikelihood`. θ is
+scanned on a coarse grid over its whole range, then refined by Brent's method
+between the grid points next to the best one. Given a `start`, such as the θ
+of the neighbouring calendar day, the search instead brackets the maximum by
+steps outward from it, and falls back to the grid if that fails. Copulas.jl's
+own fit is not used: on ERA5 data its quasi-Newton search often stopped at
+independence, or ran out of iterations far from the optimum.
+"""
+function fit_theta(family::Symbol, U::AbstractMatrix{Float64}; start::Float64 = NaN)
+    d = size(U, 1)
+    θ, lo, hi = theta_range(family, d)
+    nll(x) = (ll = copula_loglikelihood(family, θ(x), U); isfinite(ll) ? -ll : Inf)
+    h = (hi - lo) / (THETA_GRID - 1)
+    if isfinite(start)
+        x = theta_coordinate(family, d, start)
+        fx = nll(x)
+        step = h / 8
+        for _ in 1:8
+            isfinite(fx) || break
+            a, b = max(x - step, lo), min(x + step, hi)
+            fa, fb = nll(a), nll(b)
+            if fx <= fa && fx <= fb
+                x, v = brent_minimum(nll, a, b, x, fx)
+                return θ(x), -v
+            end
+            fa < fb ? ((x, fx) = (a, fa)) : ((x, fx) = (b, fb))
+            step *= 2
+        end
+    end
+    xs = range(lo, hi; length = THETA_GRID)
+    vals = map(nll, xs)
+    i = argmin(vals)
+    isfinite(vals[i]) || return (NaN, -Inf)
+    x, v = brent_minimum(nll, xs[max(i - 1, 1)], xs[min(i + 1, end)], xs[i], vals[i])
+    return θ(x), -v
+end
+
+"""
+    fit_families(U; starts = nothing) -> (copula, thetas)
+
+Fit the four Archimedean families to `U` (`fit_theta`) and return the most
+likely as an `Archimedean`, with the θ of every family in the order of
+`COPULA_FAMILIES`. `starts`, if given, holds a starting θ for each family.
+"""
+function fit_families(U::AbstractMatrix{Float64}; starts = nothing)
+    best = nothing
+    best_ll = -Inf
+    thetas = fill(NaN, length(COPULA_FAMILIES))
+    for (k, (family, _)) in enumerate(COPULA_FAMILIES)
+        θ, ll = fit_theta(family, U; start = starts === nothing ? NaN : starts[k])
+        thetas[k] = θ
+        if isfinite(ll) && ll > best_ll
+            best, best_ll = Archimedean(family, θ, size(U, 1)), ll
+        end
+    end
+    best === nothing && error("No copula family could be fitted to $(size(U, 2)) days")
+    return best, thetas
+end
+
 """
     fit_copula(U) -> Archimedean
 
 Fit the four Archimedean families to `U` (indicators × days, on the
-probability scale) by maximum likelihood with Copulas.jl, and keep the most
+probability scale) by maximum likelihood (`fit_theta`), and keep the most
 likely. Each family has one parameter, so that is also the lowest AIC.
 """
-function fit_copula(U::AbstractMatrix{Float64})
-    best = nothing
-    best_ll = -Inf
-    for (family, F) in COPULA_FAMILIES
-        C = try
-            Distributions.fit(F, U; method = :mle)
-        catch err
-            err isa InterruptException && rethrow()
-            continue
-        end
-        ll = Distributions.loglikelihood(C, U)
-        if isfinite(ll) && ll > best_ll
-            best, best_ll = Archimedean(family, Float64(C.G.θ), size(U, 1)), ll
-        end
-    end
-    best === nothing && error("No copula family could be fitted to $(size(U, 2)) days")
-    return best
-end
+fit_copula(U::AbstractMatrix{Float64}) = first(fit_families(U))
 
 # ---------------------------------------------------------------------------
 # Fits for one event type and one cell
@@ -777,6 +1069,8 @@ positions, among the type's indicators, of those in the copula, with their
 marginals and whether each is reversed. A day is a joint extreme when its
 joint value is above `threshold`. With `has_extremes` false the cell has no
 extremes of the type on this reference, because a precondition is absent.
+`thetas` holds the fitted θ of every copula family (empty with fewer than two
+indicators), the starting point for the neighbouring calendar day.
 """
 struct EventFit
     has_extremes::Bool
@@ -785,18 +1079,23 @@ struct EventFit
     reversed::Vector{Bool}
     copula::Archimedean
     threshold::Float64
+    thetas::Vector{Float64}
 end
 
-const NO_EXTREMES = EventFit(false, Int[], Marginal[], Bool[], Archimedean(:single, NaN, 0), Inf)
+const NO_EXTREMES = EventFit(false, Int[], Marginal[], Bool[], Archimedean(:single, NaN, 0), Inf,
+                             Float64[])
 
 """
-    fit_event(e, X, V) -> EventFit
+    fit_event(e, X, V; previous = nothing) -> EventFit
 
 Stage 2 for one event type, cell and baseline reference. Column j of `X`
 holds the type's j-th indicator on the reference days, and column j of `V`
-the uniform draws that spread its tied values.
+the uniform draws that spread its tied values. `previous`, the fit of the
+neighbouring calendar day, gives the copula search its starting θ when it
+used the same indicators.
 """
-function fit_event(e::EventType, X::AbstractMatrix{<:Real}, V::AbstractMatrix{Float64})
+function fit_event(e::EventType, X::AbstractMatrix{<:Real}, V::AbstractMatrix{Float64};
+                   previous::Union{Nothing, EventFit} = nothing)
     kept = Int[]
     for (j, ei) in enumerate(e.indicators)
         value, others = most_common(view(X, :, j))
@@ -817,8 +1116,14 @@ function fit_event(e::EventType, X::AbstractMatrix{<:Real}, V::AbstractMatrix{Fl
     for (a, j) in enumerate(kept), (b, r) in enumerate(rows)
         U[a, b] = pit(marginals[a], X[r, j], V[r, j], reversed[a])
     end
-    C = length(kept) == 1 ? Archimedean(:single, NaN, 1) : fit_copula(U)
-    return EventFit(true, kept, marginals, reversed, C, kendall_quantile(C, JOINT_EXTREME_LEVEL))
+    if length(kept) == 1
+        C, thetas = Archimedean(:single, NaN, 1), Float64[]
+    else
+        warm = previous !== nothing && previous.used == kept && !isempty(previous.thetas)
+        C, thetas = fit_families(U; starts = warm ? previous.thetas : nothing)
+    end
+    return EventFit(true, kept, marginals, reversed, C, kendall_quantile(C, JOINT_EXTREME_LEVEL),
+                    thetas)
 end
 
 "Day of the year on a 366-day calendar, so 29 February is day 60 in every year."
@@ -837,7 +1142,8 @@ season_rows(cdays::AbstractVector{Int}, c::Int) =
 Stage 2 for one grid cell. `series` maps each indicator's name to its daily
 values on `dates` (stage 1), and `draws` maps it to the draws of `tie_draws`.
 Each event type gets one fit on a whole-year reference, or 366 on a
-time-of-year reference, one per calendar day.
+time-of-year reference, one per calendar day, in calendar order so that each
+day's copula search starts from the previous day's θ.
 """
 function fit_cell(series::AbstractDict, draws::AbstractDict, dates::Vector{Date};
                   baseline::UnitRange{Int} = BASELINE_YEARS)
@@ -851,10 +1157,13 @@ function fit_cell(series::AbstractDict, draws::AbstractDict, dates::Vector{Date}
         fits[e.name] = if e.reference === :whole_year
             [fit_event(e, X, V)]
         else
-            map(1:366) do c
+            day_fits = EventFit[]
+            for c in 1:366
                 rows = season_rows(cdays, c)
-                fit_event(e, view(X, rows, :), view(V, rows, :))
+                push!(day_fits, fit_event(e, view(X, rows, :), view(V, rows, :);
+                                          previous = isempty(day_fits) ? nothing : day_fits[end]))
             end
+            day_fits
         end
     end
     return fits
@@ -965,52 +1274,143 @@ end
 band_name(rows::UnitRange{Int}) = "band_$(first(rows))-$(last(rows))"
 band_done(out_dir::String, rows::UnitRange{Int}) = isfile(joinpath(out_dir, band_name(rows) * ".done"))
 
+# A band's cells are fitted and saved in chunks of this many, so that a run
+# that stops loses at most the chunk in progress in each band being worked on
+# (about 10 minutes on 6 threads), plus the band's reading (about 12 minutes).
+const CHUNK_CELLS = 200
+
+chunk_name(r::UnitRange{Int}) = "cells_$(first(r))-$(last(r))"
+chunk_done(dir::String, r::UnitRange{Int}) = isfile(joinpath(dir, chunk_name(r) * ".done"))
+cell_chunks(n::Int, size::Int) = [i:min(i + size - 1, n) for i in 1:size:n]
+
 """
     run_band(grid_dir, out_dir, rows, cells, countries, areas;
-             years = RECORD_YEARS, baseline = BASELINE_YEARS, main = MAIN_YEARS) -> Bool
+             years = RECORD_YEARS, baseline = BASELINE_YEARS, main = MAIN_YEARS,
+             chunk_cells = CHUNK_CELLS) -> Bool
 
 All three stages for the cells of one latitude band (`rows`), with each cell's
-country code and area weight. Writes the band's checkpoint to `out_dir`: the
-two tables of `band_partials` as Parquet files, then a `.done` marker. A
-band whose marker exists is skipped, and `false` returned. Cells are fitted
-in parallel on Julia's threads.
+country code and area weight. The cells are taken in chunks of `chunk_cells`;
+each chunk's two tables of `band_partials` go to Parquet files in the band's
+folder of `out_dir`, followed by a `.done` marker for the chunk, and a marker
+for the band once every chunk is done. A band already done is skipped, and
+`false` returned; otherwise only the chunks not yet done are computed. Cells
+are fitted in parallel on Julia's threads.
 """
 function run_band(grid_dir::String, out_dir::String, rows::UnitRange{Int},
                   cells::Vector{CartesianIndex{2}}, countries::Vector{String},
                   areas::Vector{Float64}; years::UnitRange{Int} = RECORD_YEARS,
                   baseline::UnitRange{Int} = BASELINE_YEARS,
-                  main::UnitRange{Int} = MAIN_YEARS)
+                  main::UnitRange{Int} = MAIN_YEARS, chunk_cells::Int = CHUNK_CELLS)
     band_done(out_dir, rows) && return false
-    mkpath(out_dir)
+    dir = joinpath(out_dir, band_name(rows))
+    mkpath(dir)
     started = time()
-    dates, indicators = band_indicators(grid_dir, years, rows, cells)
-    days = findall(d -> year(d) in main, dates)
-    results = Vector{Any}(undef, length(cells))
-    finished = Threads.Atomic{Int}(0)
-    Threads.@threads :dynamic for k in eachindex(cells)
-        cell = cells[k]
-        try
-            series = Dict(name => view(m, :, k) for (name, m) in indicators)
-            draws = tie_draws(cell, length(dates))
-            fits = fit_cell(series, draws, dates; baseline)
-            results[k] = classify_cell(fits, series, draws, dates, days)
-        catch err
-            err isa InterruptException && rethrow()
-            logmsg("Rows $rows: cell (lon $(cell[1]), lat $(cell[2])) failed.")
-            rethrow()
+    todo = [r for r in cell_chunks(length(cells), chunk_cells) if !chunk_done(dir, r)]
+    if !isempty(todo)
+        logmsg("Rows $rows: $(sum(length, todo)) of $(length(cells)) cells to do.")
+        dates, indicators = band_indicators(grid_dir, years, rows, cells)
+        days = findall(d -> year(d) in main, dates)
+        for r in todo
+            results = Vector{Any}(undef, length(r))
+            Threads.@threads :dynamic for i in eachindex(r)
+                k = r[i]
+                cell = cells[k]
+                try
+                    series = Dict(name => view(m, :, k) for (name, m) in indicators)
+                    draws = tie_draws(cell, length(dates))
+                    fits = fit_cell(series, draws, dates; baseline)
+                    results[i] = classify_cell(fits, series, draws, dates, days)
+                catch err
+                    err isa InterruptException && rethrow()
+                    logmsg("Rows $rows: cell (lon $(cell[1]), lat $(cell[2])) failed.")
+                    rethrow()
+                end
+            end
+            daily, peak = band_partials(results, countries[r], areas[r], dates, days)
+            base = joinpath(dir, chunk_name(r))
+            for (df, suffix) in ((daily, "_daily.parquet"), (peak, "_peak.parquet"))
+                write_parquet(df, base * suffix * ".tmp")
+                mv(base * suffix * ".tmp", base * suffix; force = true)
+            end
+            touch(base * ".done")
+            logmsg("Rows $rows: cells $(first(r))-$(last(r)) of $(length(cells)) saved.")
         end
-        done = Threads.atomic_add!(finished, 1) + 1
-        done % 100 == 0 && logmsg("Rows $rows: $done of $(length(cells)) cells done.")
     end
-    daily, peak = band_partials(results, countries, areas, dates, days)
-    base = joinpath(out_dir, band_name(rows))
-    for (df, suffix) in ((daily, "_daily.parquet"), (peak, "_peak.parquet"))
-        write_parquet(df, base * suffix * ".tmp")
-        mv(base * suffix * ".tmp", base * suffix; force = true)
-    end
-    touch(base * ".done")
-    logmsg("Rows $rows: $(length(cells)) cells in $(round((time() - started) / 60; digits = 1)) min.")
+    touch(joinpath(out_dir, band_name(rows) * ".done"))
+    logmsg("Rows $rows: done in $(round((time() - started) / 60; digits = 1)) min.")
     return true
+end
+
+"""
+    land_bands(grid_dir; band_rows = 4) -> (bands, assignment)
+
+The latitude bands of `band_rows` grid rows that hold land cells, each as a
+named tuple of its `rows` and its `cells` with their `countries` and `areas`,
+from the assignment of grid cells to countries on the map shared with damage
+and exposure (also returned).
+"""
+function land_bands(grid_dir::String; band_rows::Int = 4)
+    first_grid = grid_path(grid_dir, first(all_sources()), first(RECORD_YEARS))
+    assignment = get_unit_assignment(first_grid)
+    n_lat = NCDataset(ds -> length(ds["latitude"]), first_grid)
+    cell_country = Dict{CartesianIndex{2}, Tuple{String, Float64}}()
+    for (code, v) in assignment, (c, w) in zip(v.cells, v.weights)
+        cell_country[c] = (code, w)
+    end
+    bands = NamedTuple[]
+    for r in 1:band_rows:n_lat
+        rows = r:min(r + band_rows - 1, n_lat)
+        cells = sort!([c for c in keys(cell_country) if c[2] in rows])
+        isempty(cells) && continue
+        push!(bands, (rows = rows, cells = cells, countries = [cell_country[c][1] for c in cells],
+                      areas = [cell_country[c][2] for c in cells]))
+    end
+    return bands, assignment
+end
+
+"""
+    claim_band(out_dir, rows, run_id) -> Bool
+
+Claim a band for this process within the run `run_id`: true for the first
+process of the run to ask, false for every other. A claim is a folder, whose
+creation succeeds only once. A new run, after a stop, has a new id, so
+claims left by processes that stopped do not block it.
+"""
+function claim_band(out_dir::String, rows::UnitRange{Int}, run_id::String)
+    dir = joinpath(out_dir, "claims", run_id)
+    mkpath(dir)
+    try
+        mkdir(joinpath(dir, band_name(rows)))
+        return true
+    catch err
+        err isa Base.IOError && ispath(joinpath(dir, band_name(rows))) && return false
+        rethrow()
+    end
+end
+
+"""
+    run_bands(run_id; grid_dir = GRID_DIR, out_dir = BANDS_DIR, band_rows = 4) -> Int
+
+One of the processes of a run: work through the land bands not yet done,
+largest first, taking each one no other process of the run `run_id` has
+claimed. Several processes started with the same `run_id` share the bands
+between them (see compute_hazard_national.sh). Returns the number of bands
+this process worked on.
+"""
+function run_bands(run_id::String; grid_dir::String = GRID_DIR, out_dir::String = BANDS_DIR,
+                   band_rows::Int = 4)
+    bands, _ = land_bands(grid_dir; band_rows)
+    sort!(bands; by = b -> length(b.cells), rev = true)
+    n = 0
+    for b in bands
+        band_done(out_dir, b.rows) && continue
+        claim_band(out_dir, b.rows, run_id) || continue
+        run_band(grid_dir, out_dir, b.rows, b.cells, b.countries, b.areas)
+        n += 1
+    end
+    left = count(b -> !band_done(out_dir, b.rows), bands)
+    logmsg("Worked on $n bands; $left of $(length(bands)) bands not done yet.")
+    return n
 end
 
 """
@@ -1030,7 +1430,8 @@ function combine_bands(out_dir::String, bands::AbstractVector{UnitRange{Int}},
     grid = DataFrame(
         [(country_code = r.country_code, year = y, event_type = e.name, area = r.area)
          for r in eachrow(country_areas) for y in main for e in EVENT_TYPES])
-    files(suffix) = "[" * join((sql_path(joinpath(out_dir, band_name(b) * suffix)) for b in bands), ", ") * "]"
+    files(suffix) = "[" * join((sql_path(joinpath(out_dir, band_name(b), "*" * suffix))
+                                for b in bands), ", ") * "]"
     con = DuckDB.DB()
     try
         DuckDB.register_data_frame(con, grid, "grid")
@@ -1066,32 +1467,16 @@ end
 """
     hazard_country_year(; grid_dir = GRID_DIR, out_dir = BANDS_DIR, band_rows = 4) -> DataFrame
 
-The whole hazard transformation: every latitude band of `band_rows` grid rows
-that holds land cells, then the national values. Cells are assigned to
-countries on the map shared with damage and exposure. Bands already done in
-`out_dir` are skipped, so a stopped run resumes where it left off.
+The national values from the checkpoints of every land band, which
+`run_bands` must have completed first (see compute_hazard_national.sh).
+Errors if any band is not done.
 """
 function hazard_country_year(; grid_dir::String = GRID_DIR, out_dir::String = BANDS_DIR,
                              band_rows::Int = 4)
-    first_grid = grid_path(grid_dir, first(all_sources()), first(RECORD_YEARS))
-    assignment = get_unit_assignment(first_grid)
-    n_lat = NCDataset(ds -> length(ds["latitude"]), first_grid)
-    cell_country = Dict{CartesianIndex{2}, Tuple{String, Float64}}()
-    for (code, v) in assignment, (c, w) in zip(v.cells, v.weights)
-        cell_country[c] = (code, w)
-    end
-    bands = UnitRange{Int}[]
-    for r in 1:band_rows:n_lat
-        rows = r:min(r + band_rows - 1, n_lat)
-        cells = sort!([c for c in keys(cell_country) if c[2] in rows])
-        isempty(cells) && continue
-        push!(bands, rows)
-        run_band(grid_dir, out_dir, rows, cells, [cell_country[c][1] for c in cells],
-                 [cell_country[c][2] for c in cells])
-    end
+    bands, assignment = land_bands(grid_dir; band_rows)
     country_areas = DataFrame(country_code = collect(keys(assignment)),
                               area = [sum(v.weights) for v in values(assignment)])
-    return combine_bands(out_dir, bands, country_areas)
+    return combine_bands(out_dir, [b.rows for b in bands], country_areas)
 end
 
 end # module HazardTransform

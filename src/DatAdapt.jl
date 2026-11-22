@@ -194,12 +194,13 @@ end
 """
     compute_hazard_national() -> nothing
 
-Compute the national annual hazard values from the ERA5 grids
-(`HazardTransform.hazard_country_year`) and write them to the table
-`hazard_national` of the raw database, from which `transform_data("hazard")`
-makes the processed table. Needs every grid year 1950-2025 in
-`HazardDataFetch.GRID_DIR`; bands already done are taken from their
-checkpoints.
+Combine the checkpoints of every latitude band into the national annual
+hazard values (`HazardTransform.hazard_country_year`) and write them to the
+table `hazard_national` of the raw database, from which
+`transform_data("hazard")` makes the processed table. The bands are computed
+first by `HazardTransform.run_bands`, in several processes: run
+compute_hazard_national.sh, which does both. Errors, writing nothing, if any
+band is not done.
 """
 function compute_hazard_national()
     national = HazardTransform.hazard_country_year()

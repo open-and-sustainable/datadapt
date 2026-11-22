@@ -313,12 +313,118 @@ end
         @test HT.kendall(HT.Archimedean(:single, NaN, 1), 0.7) == 0.7
     end
 
+    @testset "Brent's method" begin
+        f(x) = (x - 0.3)^2 + 1
+        x, fx = HT.brent_minimum(f, -2.0, 2.0, -1.0, f(-1.0))
+        @test x ≈ 0.3 atol = 1e-6
+        @test fx ≈ 1.0
+        # A minimum at the edge of the interval
+        x, _ = HT.brent_minimum(x -> exp(x), 0.0, 1.0, 0.0, 1.0)
+        @test x < 1e-6
+    end
+
+    @testset "range of θ searched" begin
+        for d in 2:4
+            θ, lo, hi = HT.theta_range(:clayton, d)
+            @test θ(lo) > -1 / (d - 1) && θ(hi) ≈ HT.THETA_MAX
+            for fam in (:gumbel, :joe)
+                θ, lo, hi = HT.theta_range(fam, d)
+                @test θ(lo) > 1 && θ(hi) ≈ HT.THETA_MAX
+            end
+        end
+        θ, lo, hi = HT.theta_range(:frank, 2)
+        @test θ(lo) ≈ -HT.THETA_MAX && θ(hi) ≈ HT.THETA_MAX
+        θ, lo, hi = HT.theta_range(:frank, 3)
+        @test 0 < θ(lo) < 1e-5 && θ(hi) ≈ HT.THETA_MAX
+    end
+
+    @testset "copula likelihoods match Copulas.jl" begin
+        rng = Xoshiro(11)
+        cases = Dict(:clayton => (Copulas.ClaytonCopula, [-0.3, 0.05, 1.0, 12.0, 150.0]),
+                     :frank => (Copulas.FrankCopula, [-6.0, 0.01, 2.0, 38.0, 150.0]),
+                     :gumbel => (Copulas.GumbelCopula, [1.0001, 1.5, 9.0, 100.0]),
+                     :joe => (Copulas.JoeCopula, [1.0001, 1.6, 11.0, 100.0]))
+        for (fam, (F, θs)) in cases, d in 2:4, θ in θs
+            fam === :frank && d > 2 && θ < 0 && continue
+            fam === :clayton && θ <= -1 / (d - 1) && continue
+            # Days from the copula itself, plus days at the edges of (0, 1)
+            U = clamp.(rand(rng, F(d, θ), 100), HT.U_EPS, 1 - HT.U_EPS)
+            U[:, 1] .= HT.U_EPS
+            U[:, 2] .= 1 - HT.U_EPS
+            U[1, 3] = HT.U_EPS
+            for j in axes(U, 2)
+                ours = HT.copula_loglikelihood(fam, θ, U[:, j:j])
+                ref = logpdf(F(d, θ), U[:, j])
+                isapprox(ours, ref; rtol = 1e-9, atol = 1e-10) && continue
+                # Where Copulas.jl loses precision at the edges (or returns
+                # -Inf or NaN), compare with it in 256-bit arithmetic
+                ref = setprecision(256) do
+                    Float64(logpdf(F(d, big(θ)), big.(U[:, j])))
+                end
+                @test ours ≈ ref atol = 1e-8
+            end
+        end
+        # Independence, and a day outside Clayton's support for negative θ
+        U = rand(rng, 3, 100)
+        @test HT.copula_loglikelihood(:frank, 0.0, U) == 0.0
+        @test HT.copula_loglikelihood(:clayton, -0.45, [0.01 0.99; 0.01 0.99; 0.01 0.99]) == -Inf
+        # No allocation, so that fits on many threads do not wait on the
+        # garbage collector
+        allocated(fam, U) = @allocated HT.copula_loglikelihood(fam, 2.0, U)
+        for fam in (:clayton, :frank, :gumbel, :joe)
+            allocated(fam, U)
+            @test allocated(fam, U) == 0
+        end
+    end
+
+    @testset "maximum-likelihood θ" begin
+        rng = Xoshiro(6)
+        # Each family recovers its own θ, including strong Frank dependence
+        # (where Copulas.jl's own fit ran out of iterations on ERA5 data) and
+        # negative dependence where the family allows it
+        for (fam, F, d, θ0) in ((:clayton, Copulas.ClaytonCopula, 3, 3.0),
+                                (:clayton, Copulas.ClaytonCopula, 2, -0.3),
+                                (:frank, Copulas.FrankCopula, 3, 38.0),
+                                (:frank, Copulas.FrankCopula, 2, -4.0),
+                                (:gumbel, Copulas.GumbelCopula, 4, 2.0),
+                                (:joe, Copulas.JoeCopula, 2, 1.5))
+            U = rand(rng, F(d, θ0), 5_000)
+            θ, ll = HT.fit_theta(fam, U)
+            @test θ ≈ θ0 rtol = 0.1
+            # It is the maximum: no better than nearby values. (Copulas.jl's
+            # own likelihood can be -Inf here, from days at the edges.)
+            @test ll ≈ HT.copula_loglikelihood(fam, θ, U)
+            for δ in (0.99, 1.01)
+                θ * δ > HT.theta_range(fam, d)[1](HT.theta_range(fam, d)[2]) &&
+                    @test HT.copula_loglikelihood(fam, θ * δ, U) <= ll
+            end
+        end
+        # Independent indicators: θ at independence
+        U = rand(rng, 2, 5_000)
+        @test abs(HT.fit_theta(:frank, U)[1]) < 0.2
+        @test HT.fit_theta(:gumbel, U)[1] < 1.05
+        # Starting from a θ nearby or far away gives the same fit as the grid
+        U = rand(rng, Copulas.JoeCopula(3, 2.5), 2_000)
+        θg, llg = HT.fit_theta(:joe, U)
+        for start in (θg * 1.05, 1.0, 150.0)
+            θs, lls = HT.fit_theta(:joe, U; start)
+            @test θs ≈ θg rtol = 1e-5
+            @test lls ≈ llg
+        end
+        for (fam, d, θ) in ((:clayton, 3, 2.0), (:frank, 2, -3.0), (:gumbel, 4, 1.7))
+            @test HT.theta_range(fam, d)[1](HT.theta_coordinate(fam, d, θ)) ≈ θ
+        end
+    end
+
     @testset "copula fit" begin
         rng = Xoshiro(6)
         C = HT.fit_copula(rand(rng, Copulas.GumbelCopula(3, 2.0), 5_000))
         @test C.family === :gumbel && C.dim == 3
         @test C.θ ≈ 2.0 atol = 0.1
         @test HT.fit_copula(rand(rng, Copulas.ClaytonCopula(3, 3.0), 5_000)).family === :clayton
+        C = HT.fit_copula(rand(rng, Copulas.FrankCopula(3, 38.0), 5_000))
+        @test C.family === :frank
+        @test C.θ ≈ 38.0 rtol = 0.1
     end
 
     @testset "event fits" begin
@@ -455,12 +561,15 @@ end
 
     @testset "national values" begin
         out = mktempdir()
-        write_band(rows, d, p) = begin
-            HT.write_parquet(d, joinpath(out, HT.band_name(rows) * "_daily.parquet"))
-            HT.write_parquet(p, joinpath(out, HT.band_name(rows) * "_peak.parquet"))
+        write_band(rows, d, p; chunk = "cells_1-200") = begin
+            dir = mkpath(joinpath(out, HT.band_name(rows)))
+            HT.write_parquet(d, joinpath(dir, chunk * "_daily.parquet"))
+            HT.write_parquet(p, joinpath(dir, chunk * "_peak.parquet"))
             touch(joinpath(out, HT.band_name(rows) * ".done"))
         end
+        # Band 1:4 in two chunks, one of them with no extremes at all
         write_band(1:4, daily, peak)
+        write_band(1:4, daily[1:0, :], peak[1:0, :]; chunk = "cells_201-400")
         # A second band adds to AAA's second day and raises its 1980 peak
         write_band(5:8,
             DataFrame(country_code = ["AAA"], date = [dates[2]], event_type = ["Flood"], extreme_area = [0.5]),
@@ -503,19 +612,49 @@ end
         cells = [CartesianIndex(1, 2), CartesianIndex(2, 2), CartesianIndex(1, 3)]
         countries = ["AAA", "AAA", "BBB"]
         areas = cosd.([59.75, 59.75, 59.5])
-        kw = (years = 1950:1954, baseline = 1950:1952, main = 1953:1954)
+        kw = (years = 1950:1954, baseline = 1950:1952, main = 1953:1954, chunk_cells = 2)
         @test HT.run_band(dir, out, 2:3, cells, countries, areas; kw...)
         @test HT.band_done(out, 2:3)
+        band = joinpath(out, HT.band_name(2:3))
+        @test sort(filter(endswith(".done"), readdir(band))) == ["cells_1-2.done", "cells_3-3.done"]
         # A band already done is skipped
         @test !HT.run_band(dir, out, 2:3, cells, countries, areas; kw...)
-        tab = HT.combine_bands(out, [2:3],
-            DataFrame(country_code = ["AAA", "BBB"], area = [2cosd(59.75), cosd(59.5)]);
-            main = 1953:1954)
+        country_areas = DataFrame(country_code = ["AAA", "BBB"], area = [2cosd(59.75), cosd(59.5)])
+        tab = HT.combine_bands(out, [2:3], country_areas; main = 1953:1954)
+        # A stop during the second chunk: only that chunk is computed again,
+        # with the same results
+        rm(joinpath(out, HT.band_name(2:3) * ".done"))
+        rm(joinpath(band, "cells_3-3.done"))
+        rm(joinpath(band, "cells_3-3_daily.parquet"))
+        first_chunk = mtime(joinpath(band, "cells_1-2_daily.parquet"))
+        @test HT.run_band(dir, out, 2:3, cells, countries, areas; kw...)
+        @test mtime(joinpath(band, "cells_1-2_daily.parquet")) == first_chunk
+        @test isfile(joinpath(band, "cells_3-3_daily.parquet"))
+        tab2 = HT.combine_bands(out, [2:3], country_areas; main = 1953:1954)
+        @test tab2.country_code == tab.country_code && tab2.event_type == tab.event_type
+        @test tab2.extreme_area_days ≈ tab.extreme_area_days
+        @test tab2.peak_extent ≈ tab.peak_extent
+        @test isequal(tab2.peak_return_period_years, tab.peak_return_period_years)
         @test nrow(tab) == 2 * 2 * 8
         @test all(0 .<= tab.extreme_area_days .<= 365)
         @test all(0 .<= tab.peak_extent .<= 1 + 1e-12)
         @test all(!ismissing, tab.peak_return_period_years)
         # The main period is like the baseline, so about 5% of days are extremes
         @test 0.01 < mean(tab.extreme_area_days) / 365 < 0.12
+    end
+
+    @testset "claims share bands between processes" begin
+        out = mktempdir()
+        @test HT.claim_band(out, 1:4, "run1")
+        @test !HT.claim_band(out, 1:4, "run1")
+        @test HT.claim_band(out, 5:8, "run1")
+        # A new run is not blocked by the claims of one that stopped
+        @test HT.claim_band(out, 1:4, "run2")
+        # Many processes asking at once: exactly one gets each band
+        got = Threads.Atomic{Int}(0)
+        @sync for _ in 1:8
+            Threads.@spawn HT.claim_band(out, 9:12, "run3") && Threads.atomic_add!(got, 1)
+        end
+        @test got[] == 1
     end
 end

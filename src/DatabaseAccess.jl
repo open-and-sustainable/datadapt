@@ -170,9 +170,11 @@ function update_metadata!(con::DuckDB.DB, table_name::String,
         )""")
     DBInterface.execute(con,
         "DELETE FROM metadata WHERE table_name = $(escape_sql_string(table_name))")
+    # Today's date comes from Julia: DuckDB's CURRENT_DATE needs its ICU
+    # extension, which DuckDB downloads on first use, so fails offline
     DBInterface.execute(con,
         "INSERT INTO metadata VALUES ($(escape_sql_string(table_name)), " *
-        "$start_year, $end_year, $(escape_sql_string(source)), CURRENT_DATE)")
+        "$start_year, $end_year, $(escape_sql_string(source)), DATE '$(Dates.today())')")
 end
 
 function create_table_with_types!(df::DataFrame, con::DuckDB.DB, table_name::String)
