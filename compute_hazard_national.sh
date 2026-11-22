@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # National hazard values from the ERA5 grids (src/HazardTransform.jl), written
-# to the table hazard_national of the raw database.
+# to the table hazard of the raw database.
 #
 # The latitude bands are shared among PROCESSES Julia processes of THREADS
 # threads each, all at the lowest CPU priority (nice 19), so that other work

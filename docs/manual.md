@@ -1,20 +1,20 @@
 ## Hazard transformation method
 
-This section records how hazard is transformed from the ERA5 grids to national annual values, and why. Every step below has been agreed. None of it is implemented yet: the recomputation will run once every ERA5 grid year, 1950–2025, is available.
+This section records how hazard is transformed from the ERA5 grids to national annual values, and why. Every step below has been agreed. It is implemented in `src/HazardTransform.jl`, run by `compute_hazard_national.sh`, which writes the values to the table `hazard` of the raw database.
 
 ### Why country-day averages are not enough
 
-The fetch currently aggregates each daily grid straight to countries (`aggregate_country_daily` in `src/HazardDataFetch.jl`). For each country and day it keeps four numbers from the grid cells inside the country: the area-weighted mean, the minimum, the maximum and the number of cells. The re-aggregation to the GADM-based country map (`reaggregate_year`) uses the same function. This is not enough to characterise extreme events, which are subnational by definition:
+The fetch first aggregated each daily grid straight to countries. For each country and day it kept four numbers from the grid cells inside the country: the area-weighted mean, the minimum, the maximum and the number of cells. This is not enough to characterise extreme events, which are subnational by definition, so the fetch now keeps the full grids instead:
 
 1. **The mean dilutes local events.** An extreme confined to a small part of a country barely changes the national mean. Heavy rain on 1% of the area, for example, moves it by about 1% of the rainfall.
 2. **The maximum is a single cell, in a different place each day.** It shows how extreme the worst cell was, but not where the event happened or how much of the country it covered.
-3. **Averaging comes before the event measures, and can't be undone.** Event measures are nonlinear: threshold exceedances, durations, multi-day accumulations, joint occurrence of several variables. They have to be computed in each grid cell before any spatial aggregation. The country-day table can't provide them, so they must be computed from the gridded NetCDF files.
+3. **Averaging comes before the event measures, and can't be undone.** Event measures are nonlinear: threshold exceedances, durations, multi-day accumulations, joint occurrence of several variables. They have to be computed in each grid cell before any spatial aggregation. A country-day table can't provide them, so they must be computed from the gridded NetCDF files.
 
 ### Scope
 
 Only the hazard domain is changed here. Hazard, damage and exposure stay independent: hazard is characterised by physical and climatological measures alone, with no weighting by exposure or damage. How the domains are combined belongs to the modelling and analysis stage, outside this repository.
 
-The method uses only the data the pipeline already downloads: the 14 ERA5 daily statistics for 1950–2025, through the main and baseline fetches. It requires no further downloads.
+The method uses only the data the pipeline already downloads: the 14 ERA5 daily statistics for 1950–2025, which the fetch saves as full grids (`fetch_hazard_data`, in `DatAdapt-database/raw/era5_grid`). It requires no further downloads.
 
 ### Method
 
@@ -22,7 +22,7 @@ The method follows the concurrent-extremes approach of Bennett et al. (2021) and
 
 #### Step 1: a baseline reference for each grid cell
 
-Every grid cell gets its own reference for each event type, taken from the baseline period 1950–1979, which is fetched for this purpose (`fetch_baseline_hazard_data`, written to `DatAdapt-database/raw/DatAdapt_1950-1979.duckdb`). An extreme is then measured against the climate of the cell where it happens, so regions with very different climates are comparable before they are combined into countries. A 35 °C day, for instance, is extreme in Oslo but ordinary in Riyadh.
+Every grid cell gets its own reference for each event type, taken from the baseline period 1950–1979, whose grids are fetched for this purpose along with the others. An extreme is then measured against the climate of the cell where it happens, so regions with very different climates are comparable before they are combined into countries. A 35 °C day, for instance, is extreme in Oslo but ordinary in Riyadh.
 
 The per-cell reference follows the peaks-over-threshold approach of Bennett et al. (2021, §2.4.1). There, each indicator had its own threshold at each grid cell, from the historical period: the 95th percentile for high extremes and the 5th for low ones. An exceedance was recorded as a binary value for each cell and timestep. Those per-indicator thresholds and binary exceedances are not used here, because an extreme is defined jointly over an event type's indicators (Step 3). Instead, the cell's baseline supplies the indicators' marginal distributions, their copula and the joint threshold.
 
@@ -191,7 +191,7 @@ Boero et al.'s two elliptical families, Gaussian and Student's t, were considere
 
 Each country, year and event type gets three values, computed from the per-cell, per-day joint extremes of Step 3. None of them averages indicator values or intensities across cells, so an extreme in one part of a country is not diluted by the rest of it.
 
-**Cells are weighted by their real surface area.** All cells are 0.25° × 0.25°, but their area in km² shrinks towards the poles in proportion to the cosine of latitude. A cell at 60°N, for example, covers about half the area of one at the equator. The current country-day aggregation already uses this weighting (`aggregate_country_daily` in `src/HazardDataFetch.jl`), and cells are assigned to countries the same way it does it (`assign_cells`). Each day counts in its own calendar year (Step 2).
+**Cells are weighted by their real surface area.** All cells are 0.25° × 0.25°, but their area in km² shrinks towards the poles in proportion to the cosine of latitude. A cell at 60°N, for example, covers about half the area of one at the equator. Each cell is assigned to the country that contains its centre (`assign_cells` in `src/HazardDataFetch.jl`). Each day counts in its own calendar year (Step 2).
 
 **The three values.** Let aᵢ be the area of cell i and A = Σᵢ aᵢ the area of all the country's cells. Let Eᵢ,d be 1 when cell i is in a joint extreme on day d, and 0 otherwise.
 

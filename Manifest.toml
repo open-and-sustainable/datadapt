@@ -2,7 +2,7 @@
 
 julia_version = "1.13.3"
 manifest_format = "2.1"
-project_hash = "1ef040bae9cdaa99fa0eb27757ec1fe69d11e80f"
+project_hash = "27740da1c7b6f717ad4ee36063a79bdd06ca8ab1"
 
 [[deps.ADTypes]]
 deps = ["PrecompileTools"]
@@ -313,13 +313,6 @@ git-tree-sha1 = "249fe38abf76d48563e2f4556bebd215aa317e15"
 registries = "General"
 uuid = "a8cc5b0e-0ffa-5ad4-8c14-923d3ee1735f"
 version = "4.1.1"
-
-[[deps.DBFTables]]
-deps = ["Dates", "Printf", "Tables", "WeakRefStrings"]
-git-tree-sha1 = "25f7e32f980605f8261ed8008418e41f5faec4b1"
-registries = "General"
-uuid = "75c7ada1-017a-5fb6-b8c7-2125ff2d6c93"
-version = "1.2.7"
 
 [[deps.DBInterface]]
 git-tree-sha1 = "a444404b3f94deaa43ca2a58e18153a82695282b"
@@ -1257,23 +1250,6 @@ git-tree-sha1 = "89880a2cca5cabc68c9023f58e544beda1d2fc1f"
 registries = "General"
 uuid = "efcf1570-3423-57d1-acb7-fd33fddbac46"
 version = "1.2.0"
-
-[[deps.Shapefile]]
-deps = ["DBFTables", "DataAPI", "Extents", "GeoFormatTypes", "GeoInterface", "OrderedCollections", "Tables"]
-git-tree-sha1 = "761a19d86ab3e90ed4dcb07692b2ce225124feb3"
-registries = "General"
-uuid = "8e980c4a-a4fe-5da2-b3a7-4b4b0353a2f4"
-version = "0.13.3"
-
-    [deps.Shapefile.extensions]
-    ShapefileMakieExt = "Makie"
-    ShapefileRecipesBaseExt = "RecipesBase"
-    ShapefileZipFileExt = "ZipFile"
-
-    [deps.Shapefile.weakdeps]
-    Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
-    RecipesBase = "3cdcf5f2-1ef4-517c-9805-6587b60abb01"
-    ZipFile = "a5390f91-8eb1-5f08-bee0-b1d1ffed6cea"
 
 [[deps.SimpleBufferStream]]
 git-tree-sha1 = "f305871d2f381d21527c770d4788c06c097c9bc1"

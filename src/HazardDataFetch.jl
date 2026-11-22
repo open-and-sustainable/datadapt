@@ -1,14 +1,10 @@
 module HazardDataFetch
 
 using DataFrames
-using Dates
-using Statistics
 using CSV
-using HTTP
 using JSON
 using NCDatasets
 using ZipFile
-using Shapefile
 using GeoInterface
 using LibGEOS
 using SQLite
@@ -19,15 +15,16 @@ using ..CDSAPI: logmsg
 export fetch_hazard_data
 
 const DATASET = "derived-era5-single-levels-daily-statistics"
+
+# The CDS job registries and the cached assignment of grid cells to countries
 const DATA_DIR = "DatAdapt-database/raw/era5_daily"
 
-# Retained gridded downloads live apart from the country-level checkpoints:
-# they are the original source data, ~731 MB per variable-year, and 644 of
-# them in one flat directory would be unusable. One directory per year holds
-# that year's 14 variable-statistics, matching the order the fetch fills them
-# in and keeping a year's ~10 GB together for archiving or pruning.
+# The downloaded grids, the input of the hazard transform (HazardTransform).
+# They are ~731 MB per variable-year, and 1,064 of them in one flat directory
+# would be unusable. One directory per year holds that year's 14
+# variable-statistics, matching the order the fetch fills them in and keeping
+# a year's ~10 GB together for archiving or pruning.
 const GRID_DIR = "DatAdapt-database/raw/era5_grid"
-const COUNTRIES_URL = "https://naciscdn.org/naturalearth/10m/cultural/ne_10m_admin_0_countries.zip"
 
 # (variable, daily_statistic) pairs downloaded from the CDS.
 # Values keep native ERA5 units: temperatures/dewpoint [K],
@@ -72,70 +69,31 @@ const MAX_ATTEMPTS = 3
 const FAILED_RETRY_DELAY = 60.0
 
 """
-    fetch_hazard_data(sink, start_year, end_year) -> nothing
+    fetch_hazard_data(start_year, end_year) -> nothing
 
-Download ERA5 post-processed daily statistics from the CDS and aggregate them
-to country-day level. Each completed year is passed to `sink(year, df)` as a
-long-format DataFrame with columns: date, country_iso3, variable, statistic,
-value_mean (area-weighted), value_min, value_max, n_cells.
+Download the ERA5 post-processed daily statistics of every year from
+`start_year` to `end_year` as full global grids, one NetCDF file per
+variable-statistic and year under `GRID_DIR`. Nothing is aggregated and
+nothing is written to a database: the grids are the input of the hazard
+transform (HazardTransform).
 
-Years are handed over one at a time and not retained afterwards, so peak
-memory stays at roughly one year (~1M rows) no matter how long the requested
-period is. `sink` is expected to be idempotent per year, since a resumed run
-replays years it already handed over.
-
-Progress is checkpointed per year in `DATA_DIR/country_daily_<year>.csv`;
-already-processed years are reloaded from disk rather than re-downloaded, so
-interrupted runs can be resumed.
+Files already in `GRID_DIR` are skipped, and CDS jobs still running from an
+earlier run are picked up again, so an interrupted fetch resumes. A grid
+moved off local disk counts as absent and is downloaded again.
 """
-function fetch_hazard_data(sink::Function, start_year::Int, end_year::Int)
+function fetch_hazard_data(start_year::Int, end_year::Int)
     if start_year < 1940
         @warn "ERA5 starts in 1940; adjusting start year from $start_year to 1940"
         start_year = 1940
     end
     mkpath(DATA_DIR)
 
-    for year in start_year:end_year
-        csv_path = joinpath(DATA_DIR, "country_daily_$year.csv")
-        if isfile(csv_path)
-            logmsg("Year $year already processed. Loading checkpoint.")
-            df = load_checkpoint(csv_path)
-        else
-            df = process_year(year)
-            CSV.write(csv_path, df)
-            cleanup_parts(year)
-        end
-        sink(year, df)
-    end
-    return nothing
-end
-
-function load_checkpoint(csv_path::String)
-    return CSV.read(csv_path, DataFrame;
-        types = Dict(:date => Date, :country_iso3 => String,
-                     :variable => String, :statistic => String))
-end
-
-# Each (variable, statistic) is checkpointed separately so an interrupted run
-# only loses the piece it was working on. The CDS is kept topped up to `cap`
-# jobs in flight (starting at MAX_IN_FLIGHT): the moment a job is seen finished
-# its slot is refilled *before* the slow local download+aggregate, so the CDS
-# queue never idles waiting on us. A "rejected" status means the per-account
-# queued limit was hit; it is transient, so the variable/statistic is requeued,
-# the cap is lowered by one, and new submissions pause for a growing backoff.
-function process_year(year::Int)
-    results = Vector{Union{Nothing, DataFrame}}(nothing, length(VARIABLE_STATS))
-    jobs = load_job_registry(year)
     todo = Tuple{Int, Int}[]
     attached = Dict{Tuple{Int, Int}, String}()
-
-    for (i, (variable, statistic)) in enumerate(VARIABLE_STATS)
-        if isfile(part_checkpoint_path(variable, statistic, year))
-            logmsg("$variable / $statistic for $year already aggregated. Loading checkpoint.")
-            results[i] = load_checkpoint(part_checkpoint_path(variable, statistic, year))
-        elseif isfile(nc_path(variable, statistic, year))
-            results[i] = aggregate_part(variable, statistic, year)
-        else
+    for year in start_year:end_year
+        jobs = load_job_registry(year)
+        for (i, (variable, statistic)) in enumerate(VARIABLE_STATS)
+            isfile(nc_path(variable, statistic, year)) && continue
             key = registry_key(variable, statistic)
             job_id = get(jobs, key, "")
             if !isempty(job_id) && job_is_alive(job_id)
@@ -151,73 +109,23 @@ function process_year(year::Int)
         end
     end
 
-    drive_cds_fetch(todo, attached) do fetched_year, i
-        variable, statistic = VARIABLE_STATS[i]
-        results[i] = aggregate_part(variable, statistic, fetched_year)
-    end
-    return vcat(results...)
-end
-
-"""
-    backfill_grids(items) -> nothing
-
-Re-download gridded files that are no longer on disk, without aggregating
-them. `items` lists `(year, variable, statistic)` triples.
-
-Early runs deleted each grid once it had been aggregated, leaving years whose
-country-level data has no source file behind it. `fetch_hazard_data` cannot
-recover those: it reloads such a year from its checkpoint and never looks at
-the grids. Nothing here is aggregated and nothing is written to the database,
-because that data already exists and re-deriving it could only disturb it.
-
-Which files are absent is not decided here: a grid already moved to archival
-storage is gone from `GRID_DIR` yet must not be fetched again, and where that
-storage is depends on the installation. Callers pass the list; files still
-present locally are skipped, so an interrupted backfill resumes.
-"""
-function backfill_grids(items)
-    todo = Tuple{Int, Int}[]
-    attached = Dict{Tuple{Int, Int}, String}()
-    years = Int[]
-
-    for (year, variable, statistic) in items
-        year in years || push!(years, year)
-        i = findfirst(==((variable, statistic)), VARIABLE_STATS)
-        i === nothing &&
-            error("$variable / $statistic is not one of the downloaded variable-statistics")
-        isfile(nc_path(variable, statistic, year)) && continue
-        jobs = load_job_registry(year)
-        key = registry_key(variable, statistic)
-        job_id = get(jobs, key, "")
-        if !isempty(job_id) && job_is_alive(job_id)
-            logmsg("Re-attaching to CDS job $job_id for $variable / $statistic $year.")
-            attached[(year, i)] = job_id
-        else
-            if !isempty(job_id)
-                delete!(jobs, key)
-                save_job_registry(year, jobs)
-            end
-            push!(todo, (year, i))
-        end
-    end
-
     outstanding = length(todo) + length(attached)
     if outstanding == 0
-        logmsg("No gridded files to backfill.")
+        logmsg("Every grid of $start_year-$end_year is already on disk.")
     else
-        logmsg("Backfilling $outstanding gridded files across $(length(years)) years.")
+        logmsg("Fetching $outstanding grids of $start_year-$end_year.")
         drive_cds_fetch(todo, attached) do year, i
             variable, statistic = VARIABLE_STATS[i]
-            logmsg("Recovered $variable / $statistic for $year.")
+            logmsg("Saved $variable / $statistic for $year.")
         end
     end
 
     # A year's job registry is also how anything that moves finished years off
     # local disk knows the year is still being written to. Drop it only once
-    # every requested file of that year is back in place, so a half-filled
-    # year is never archived.
-    for year in years
-        all(isfile(nc_path(v, s, y)) for (y, v, s) in items if y == year) || continue
+    # all of that year's grids are in place, so a half-filled year is never
+    # archived.
+    for year in start_year:end_year
+        all(isfile(nc_path(v, s, year)) for (v, s) in VARIABLE_STATS) || continue
         path = job_registry_path(year)
         isfile(path) && rm(path)
     end
@@ -232,8 +140,8 @@ call `on_ready(year, index)` on each one after it is downloaded and extracted.
 
 Work items are `(year, index)` pairs, where `index` points into
 `VARIABLE_STATS`; `attached` holds the items whose CDS job is already running
-from an earlier run. Items may span years, so a backfill of gaps scattered
-over the record queues as deeply as a single year's run does.
+from an earlier run. Items may span years, so the queue stays full across the
+end of a year.
 """
 function drive_cds_fetch(on_ready::Function, todo::Vector{Tuple{Int, Int}},
                          attached::Dict{Tuple{Int, Int}, String})
@@ -366,21 +274,6 @@ function cds_request(variable::String, statistic::String, year::Int)
     )
 end
 
-function aggregate_part(variable::String, statistic::String, year::Int)
-    path = nc_path(variable, statistic, year)
-    countries = get_country_assignment(path)
-    logmsg("Aggregating $variable / $statistic for $year...")
-    df = aggregate_country_daily(path, variable, statistic, countries)
-    CSV.write(part_checkpoint_path(variable, statistic, year), df)
-    # The gridded file is kept. Aggregating to countries throws away the
-    # spatial detail any later subnational analysis would need, and the CDS
-    # charges a request by variable-days regardless of the area asked for:
-    # re-fetching one country costs the same 644 jobs, and the same weeks of
-    # queue, as re-fetching the world. Storage is the cheaper side of that
-    # trade at ~731 MB per variable-year.
-    return df
-end
-
 function job_is_alive(job_id::String)
     status, _ = try
         CDSAPI.job_status(job_id)
@@ -394,9 +287,6 @@ nc_path(variable, statistic, year) =
     joinpath(GRID_DIR, string(year),
              "era5_$(variable)_$(statistic)_$year.nc")
 
-part_checkpoint_path(variable, statistic, year) =
-    joinpath(DATA_DIR, "part_$(variable)_$(statistic)_$year.csv")
-
 registry_key(variable, statistic) = "$variable|$statistic"
 
 job_registry_path(year) = joinpath(DATA_DIR, "cds_jobs_$year.json")
@@ -409,15 +299,6 @@ end
 
 save_job_registry(year::Int, jobs::Dict{String, String}) =
     write(job_registry_path(year), JSON.json(jobs))
-
-function cleanup_parts(year::Int)
-    for (variable, statistic) in VARIABLE_STATS
-        path = part_checkpoint_path(variable, statistic, year)
-        isfile(path) && rm(path)
-    end
-    registry = job_registry_path(year)
-    isfile(registry) && rm(registry)
-end
 
 # ---------------------------------------------------------------------------
 # Download
@@ -442,102 +323,15 @@ function extract_netcdf(archive_path::String, nc_path::String)
     end
 end
 
-# ---------------------------------------------------------------------------
-# Country assignment of grid cells
-# ---------------------------------------------------------------------------
-
-function ensure_countries_shapefile()
-    dir = joinpath(DATA_DIR, "countries")
-    shp_path = joinpath(dir, "ne_10m_admin_0_countries.shp")
-    isfile(shp_path) && return shp_path
-
-    mkpath(dir)
-    zip_path = joinpath(dir, "ne_10m_admin_0_countries.zip")
-    logmsg("Downloading Natural Earth country boundaries...")
-    HTTP.download(COUNTRIES_URL, zip_path)
-    archive = ZipFile.Reader(zip_path)
-    for f in archive.files
-        open(joinpath(dir, basename(f.name)), "w") do out
-            write(out, read(f))
+# The one 3-D data variable of a downloaded grid
+function find_data_variable(ds::NCDatasets.Dataset)
+    for name in keys(ds)
+        v = ds[name]
+        if ndims(v) == 3 && issetequal(dimnames(v), ("longitude", "latitude", "valid_time"))
+            return name
         end
     end
-    close(archive)
-    rm(zip_path)
-    return shp_path
-end
-
-"""
-    get_country_assignment(nc_path) -> Dict{String, NamedTuple}
-
-Assign every grid cell of the NetCDF file's lon/lat grid to a country
-(ISO3 code) by point-in-polygon test against Natural Earth boundaries.
-Returns a Dict mapping ISO3 => (cells, weights) where cells are
-CartesianIndex{2} into (lon, lat) arrays and weights are cos(latitude)
-area weights. The assignment is computed once and cached as CSV.
-"""
-function get_country_assignment(nc_path::String)
-    lon, lat = Dataset(nc_path) do ds
-        Float64.(ds["longitude"][:]), Float64.(ds["latitude"][:])
-    end
-
-    cache_path = joinpath(DATA_DIR, "grid_country_assignment_$(length(lon))x$(length(lat)).csv")
-    if isfile(cache_path)
-        df = CSV.read(cache_path, DataFrame; types = Dict(:iso3 => String))
-        return build_country_cells(df, lat)
-    end
-
-    logmsg("Assigning grid cells to countries (done once, may take a while)...")
-    shp_path = ensure_countries_shapefile()
-    features = load_country_features(shp_path)
-
-    df = assign_cells(lon, lat, features)
-    CSV.write(cache_path, df)
-    logmsg("Assigned $(nrow(df)) land cells to $(length(unique(df.iso3))) countries.")
-    return build_country_cells(df, lat)
-end
-
-# Assign each grid cell to the first feature that contains its centre. Cells
-# in no feature (sea) are left out.
-function assign_cells(lon::Vector{Float64}, lat::Vector{Float64}, features)
-    lon_idx = Int[]
-    lat_idx = Int[]
-    iso3 = String[]
-    for (j, λ) in enumerate(lon)
-        x = λ > 180 ? λ - 360 : λ  # ERA5 uses 0..360, the maps -180..180
-        for (i, φ) in enumerate(lat)
-            point = LibGEOS.Point(x, φ)
-            for f in features
-                if f.left <= x <= f.right && f.bottom <= φ <= f.top &&
-                   LibGEOS.intersects(f.prepared, point)
-                    push!(lon_idx, j)
-                    push!(lat_idx, i)
-                    push!(iso3, f.iso3)
-                    break
-                end
-            end
-        end
-    end
-    return DataFrame(lon_idx = lon_idx, lat_idx = lat_idx, iso3 = iso3)
-end
-
-function load_country_features(shp_path::String)
-    table = Shapefile.Table(shp_path)
-    features = []
-    for row in table
-        geom = Shapefile.shape(row)
-        geom === nothing && continue
-        code = row.ISO_A3
-        # Natural Earth marks some ISO codes as -99 (e.g. France, Norway)
-        if code === missing || code == "-99"
-            code = row.ADM0_A3
-        end
-        mbr = geom.MBR
-        prepared = LibGEOS.prepareGeom(GeoInterface.convert(LibGEOS, geom))
-        push!(features, (iso3 = String(code), prepared = prepared,
-                         left = mbr.left, right = mbr.right,
-                         bottom = mbr.bottom, top = mbr.top))
-    end
-    return features
+    error("No 3-D data variable with (longitude, latitude, valid_time) dimensions found")
 end
 
 # ---------------------------------------------------------------------------
@@ -580,7 +374,7 @@ function load_unit_features()
         for row in eachrow(rows)
             haskey(code_of, row.gid) || error("GADM unit $(row.gid) missing from $HAZARD_UNITS_PATH")
             code = code_of[row.gid]
-            isempty(code) && continue  # not a country (the Caspian Sea)
+            isempty(code) && continue  # not a country (the Caspian Sea, Antarctica)
             geom = gpkg_geometry(Vector{UInt8}(row.geom))
             box = GeoInterface.extent(geom)
             push!(features, (iso3 = code, prepared = LibGEOS.prepareGeom(geom),
@@ -596,9 +390,14 @@ end
 """
     get_unit_assignment(nc_path) -> Dict{String, NamedTuple}
 
-As `get_country_assignment`, but on the country map shared with damage and
-exposure. The cache is keyed by the merge table's content, so editing the
-table forces a new assignment.
+Assign every grid cell of the NetCDF file's lon/lat grid to a country of the
+map shared with damage and exposure, by point-in-polygon test of the cell's
+centre. Returns a Dict mapping each country code to (cells, weights), where
+cells are CartesianIndex{2} into the (lon, lat) arrays and weights are
+cos(latitude) area weights. Cells in no country (sea) are left out.
+
+The assignment is computed once and cached as CSV. The cache is keyed by the
+merge table's content, so editing the table forces a new assignment.
 """
 function get_unit_assignment(nc_path::String)
     lon, lat = Dataset(nc_path) do ds
@@ -613,35 +412,35 @@ function get_unit_assignment(nc_path::String)
     end
 
     logmsg("Assigning grid cells to GADM-based countries (done once, may take a while)...")
+    mkpath(DATA_DIR)
     df = assign_cells(lon, lat, load_unit_features())
     CSV.write(cache_path, df)
     logmsg("Assigned $(nrow(df)) land cells to $(length(unique(df.iso3))) countries.")
     return build_country_cells(df, lat)
 end
 
-"""
-    reaggregate_year(year; grid_dir = GRID_DIR) -> DataFrame or nothing
-
-Aggregate one year's retained grids to the country map shared with damage
-and exposure, in the same long format as `fetch_hazard_data`. Returns
-`nothing`, without aggregating anything, unless all of the year's grids are
-on local disk. `grid_dir` lets grids brought back from archival storage be
-read from a directory of their own, laid out like `GRID_DIR`.
-"""
-function reaggregate_year(year::Int; grid_dir::String = GRID_DIR)
-    paths = [joinpath(grid_dir, string(year), basename(nc_path(variable, statistic, year)))
-             for (variable, statistic) in VARIABLE_STATS]
-    absent = count(!isfile, paths)
-    if absent > 0
-        logmsg("$year: $absent of $(length(paths)) grids not on local disk; skipping.")
-        return nothing
+# Assign each grid cell to the first feature that contains its centre. Cells
+# in no feature (sea) are left out.
+function assign_cells(lon::Vector{Float64}, lat::Vector{Float64}, features)
+    lon_idx = Int[]
+    lat_idx = Int[]
+    iso3 = String[]
+    for (j, λ) in enumerate(lon)
+        x = λ > 180 ? λ - 360 : λ  # ERA5 uses 0..360, the maps -180..180
+        for (i, φ) in enumerate(lat)
+            point = LibGEOS.Point(x, φ)
+            for f in features
+                if f.left <= x <= f.right && f.bottom <= φ <= f.top &&
+                   LibGEOS.intersects(f.prepared, point)
+                    push!(lon_idx, j)
+                    push!(lat_idx, i)
+                    push!(iso3, f.iso3)
+                    break
+                end
+            end
+        end
     end
-    countries = get_unit_assignment(first(paths))
-    parts = map(zip(paths, VARIABLE_STATS)) do (path, (variable, statistic))
-        logmsg("Re-aggregating $variable / $statistic for $year...")
-        aggregate_country_daily(path, variable, statistic, countries)
-    end
-    return vcat(parts...)
+    return DataFrame(lon_idx = lon_idx, lat_idx = lat_idx, iso3 = iso3)
 end
 
 function build_country_cells(df::DataFrame, lat::Vector{Float64})
@@ -652,84 +451,6 @@ function build_country_cells(df::DataFrame, lat::Vector{Float64})
         countries[group.iso3[1]] = (cells = cells, weights = weights)
     end
     return countries
-end
-
-# ---------------------------------------------------------------------------
-# Aggregation to country-day level
-# ---------------------------------------------------------------------------
-
-function aggregate_country_daily(nc_path::String, variable::String, statistic::String, countries)
-    Dataset(nc_path) do ds
-        varname = find_data_variable(ds)
-        v = ds[varname]
-        dimnames(v) == ("longitude", "latitude", "valid_time") ||
-            error("Unexpected dimension order $(dimnames(v)) in $nc_path")
-        dates = Date.(ds["valid_time"][:])
-
-        n = length(dates) * length(countries)
-        date_col = Vector{Date}(undef, 0); sizehint!(date_col, n)
-        iso_col = Vector{String}(undef, 0); sizehint!(iso_col, n)
-        mean_col = Vector{Float64}(undef, 0); sizehint!(mean_col, n)
-        min_col = Vector{Float64}(undef, 0); sizehint!(min_col, n)
-        max_col = Vector{Float64}(undef, 0); sizehint!(max_col, n)
-        cells_col = Vector{Int}(undef, 0); sizehint!(cells_col, n)
-
-        for (t, date) in enumerate(dates)
-            slice = v[:, :, t]
-            for (iso3, cw) in countries
-                stats = weighted_stats(slice, cw.cells, cw.weights)
-                stats === nothing && continue
-                push!(date_col, date)
-                push!(iso_col, iso3)
-                push!(mean_col, stats.mean)
-                push!(min_col, stats.min)
-                push!(max_col, stats.max)
-                push!(cells_col, stats.n)
-            end
-        end
-
-        return DataFrame(
-            date = date_col,
-            country_iso3 = iso_col,
-            variable = fill(variable, length(date_col)),
-            statistic = fill(statistic, length(date_col)),
-            value_mean = mean_col,
-            value_min = min_col,
-            value_max = max_col,
-            n_cells = cells_col,
-        )
-    end
-end
-
-function find_data_variable(ds::NCDatasets.Dataset)
-    for name in keys(ds)
-        v = ds[name]
-        if ndims(v) == 3 && issetequal(dimnames(v), ("longitude", "latitude", "valid_time"))
-            return name
-        end
-    end
-    error("No 3-D data variable with (longitude, latitude, valid_time) dimensions found")
-end
-
-function weighted_stats(slice, cells::Vector{CartesianIndex{2}}, weights::Vector{Float64})
-    wsum = 0.0
-    vsum = 0.0
-    vmin = Inf
-    vmax = -Inf
-    n = 0
-    @inbounds for (k, cell) in enumerate(cells)
-        val = slice[cell]
-        val === missing && continue
-        x = Float64(val)
-        w = weights[k]
-        vsum += w * x
-        wsum += w
-        vmin = min(vmin, x)
-        vmax = max(vmax, x)
-        n += 1
-    end
-    n == 0 && return nothing
-    return (mean = vsum / wsum, min = vmin, max = vmax, n = n)
 end
 
 end # module HazardDataFetch
