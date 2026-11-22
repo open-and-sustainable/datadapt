@@ -1,7 +1,7 @@
 module HazardTransform
 
 # Hazard transformation from the ERA5 grids to national annual values, as set
-# out in docs/manual.md ("Hazard transformation method"). It runs in three
+# out in docs/raw/hazard.md, the "manual" cited below. It runs in three
 # stages, one latitude band of grid cells at a time:
 #
 #   1. daily indicators for each cell, 1950-2025, as one continuous record;

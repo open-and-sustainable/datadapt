@@ -1,0 +1,26 @@
+title: "DatAdapt"
+description: "Hazard, damage and exposure data by country and year, 1980–2025"
+baseurl: "/datadapt"
+url: "https://open-and-sustainable.github.io"
+github_repo: "https://github.com/open-and-sustainable/datadapt"
+logo: "/assets/images/DatAdapt_logo_small.png"
+favicon: "/assets/images/DatAdapt_logo_vsmall.png"
+remote_theme: Open-and-Sustainable/greendoc_theme
+
+markdown: kramdown
+kramdown:
+  input: GFM
+
+nav_links:
+  - name: "/Raw/Hazard"
+    url: "/raw/hazard.html"
+  - name: "/Raw/Damage"
+    url: "/raw/damage.html"
+  - name: "/Raw/Exposure"
+    url: "/raw/exposure.html"
+  - name: "/Processed/Hazard"
+    url: "/processed/hazard.html"
+  - name: "/Processed/Damage"
+    url: "/processed/damage.html"
+  - name: "/Processed/Exposure"
+    url: "/processed/exposure.html"

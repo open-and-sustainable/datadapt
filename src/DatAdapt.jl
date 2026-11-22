@@ -9,7 +9,7 @@ using DuckDB: DBInterface
 const START_YEAR = 1980
 const END_YEAR = 2025
 # The hazard grids also cover the baseline 1950-1979, which the national
-# values are measured against (docs/manual.md, Step 1)
+# values are measured against (docs/raw/hazard.md, Step 1)
 const BASELINE_START_YEAR = 1950
 
 # Define the database paths as constants
@@ -50,7 +50,8 @@ function fetch_damage_data()
 end
 
 const HAZARD_SOURCE = "ERA5 post-processed daily statistics, Copernicus CDS; " *
-    "national values by src/HazardTransform.jl (docs/manual.md, Hazard transformation method)"
+    "national values by src/HazardTransform.jl " *
+    "(https://open-and-sustainable.github.io/datadapt/raw/hazard.html)"
 
 # Hazard comes in two steps. The fetch only downloads the ERA5 grids, for the
 # baseline 1950-1979 and the main period alike, since the national values are

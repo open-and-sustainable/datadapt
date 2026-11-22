@@ -1,3 +1,36 @@
+---
+title: Raw hazard data
+layout: default
+---
+
+# Raw hazard data
+
+The raw table `hazard` (in `DatAdapt-database/raw/DatAdapt.duckdb`) characterises eight hazard event types in every country and year from 1980 to 2025: 207 countries, 46 years and 8 event types, 76,176 rows. Each value is computed from the ERA5 reanalysis grids, cell by cell, as described below.
+
+## Table `hazard`
+
+| Column | Type | Content |
+|---|---|---|
+| `country_code` | text | Country, on the country map shared with damage and exposure (see [Home](../index.html#countries)) |
+| `year` | integer | Calendar year, 1980–2025 |
+| `event_type` | text | One of the eight event types below |
+| `extreme_area_days` | double | Share of the country in a joint extreme, summed over the days of the year, in days (Step 4) |
+| `peak_extent` | double | Largest share of the country in a joint extreme on a single day, from 0 to 1 (Step 4) |
+| `peak_return_period_years` | double | Return period of the most extreme cell-day of the year, in years (Step 4) |
+
+The event types are named after the EM-DAT disaster types they describe: `Drought`, `Extreme temperature (cold)`, `Extreme temperature (heat)`, `Flood`, `Mass movement (wet, avalanche)`, `Mass movement (wet, landslide)`, `Storm` and `Wildfire`. Step 2 gives the indicators of each.
+
+## Source data
+
+The input is the Copernicus Climate Data Store dataset *ERA5 post-processed daily statistics on single levels* (`derived-era5-single-levels-daily-statistics`), at 0.25° resolution, for 1950–2025: 14 daily statistics, one global NetCDF file per statistic and year. The years 1950–1979 are the baseline every value is measured against (Step 1). The grids, about 0.74 TB, are kept in `DatAdapt-database/raw/era5_grid` but are not part of the published databases.
+
+## How to reproduce the table
+
+1. Save a CDS personal access token in `~/.cdsapirc` (`url:` and `key:` lines), or in the environment variables `CDSAPI_URL` and `CDSAPI_KEY`, and accept the dataset's licence on the CDS website.
+2. Download GADM 4.1 (all levels, GeoPackage) to `country_mappings/source_maps/gadm_4.1/gadm_410-levels.gpkg`. GADM's licence does not allow it to be redistributed, so it is not in the repository.
+3. Run `fetch_data.sh` to download the grids (`fetch_hazard_data`). The CDS runs one request at a time, so a full download takes weeks to months; an interrupted fetch resumes where it stopped.
+4. Run `compute_hazard_national.sh`, which computes the national values in several processes at the lowest CPU priority and writes the table `hazard`. It takes about two days on 24 threads; a stopped run resumes from its saved checkpoints.
+
 ## Hazard transformation method
 
 This section records how hazard is transformed from the ERA5 grids to national annual values, and why. Every step below has been agreed. It is implemented in `src/HazardTransform.jl`, run by `compute_hazard_national.sh`, which writes the values to the table `hazard` of the raw database.
@@ -162,7 +195,7 @@ Gumbel is tried both ways, for maxima and for minima, its mirror image, on every
 
 **Dry-day counts at their cap.** Drought's dry-day count cannot exceed 90, the length of its window. In dry places and dry seasons, such as the Sahel in January, most baseline days have all 90 days dry, a mass of values at 90 that no continuous distribution can represent. The marginal mirrors the one for zero days: F jumps by p₉₀ at 90, where p₉₀ is the share of baseline days with all 90 days dry, and G is fitted to the counts below 90 only. Days at 90 get a random u in [1 − p₉₀, 1], like the other tied values (below). If fewer than 30 baseline days have a count below 90, the indicator is left out of the cell's copula, as for indicators that are almost always zero, and Drought there rests on temperature and soil moisture.
 
-**Indicators that never vary.** The same rule covers any indicator that holds one value on nearly every baseline day, such as snow depth on glaciers, which ERA5 holds fixed at 10 m of water equivalent. An indicator with fewer than 30 baseline days that differ from its most common value is left out of the cell's copula. For Avalanche, a snow depth that never varies from a non-zero value means snow is always present, so the precondition is met and Avalanche there rests on snowfall and warming.
+**Indicators that never vary.** The same rule covers any indicator that holds one value on nearly every baseline day, such as snow depth on ice sheets and large glaciers, which ERA5 holds fixed at 10 m of water equivalent. An indicator with fewer than 30 baseline days that differ from its most common value is left out of the cell's copula. For Avalanche, a snow depth that never varies from a non-zero value means snow is always present, so the precondition is met and Avalanche there rests on snowfall and warming.
 
 **Tied values are spread at random.** The copula is fitted to one point (u₁, …, uₘ) per baseline day, and assumes that no two points are identical. Two kinds of indicator break that assumption. Zero days all share u = p₀ (see above), and Drought's dry-day counts repeat because they are whole numbers from 0 to 90. Fitted as they are, such ties form a wall of identical points that the fit reads as real structure, which distorts the estimated dependence and can change which family is chosen. Each tied day therefore gets a random u, drawn uniformly from the probability range its value covers: [0, p₀] for a zero day, and [F(k − ½), F(k + ½)] for a dry-day count k. This is the randomised probability integral transform (Brockwell, 2007).
 
@@ -223,8 +256,6 @@ The reference studies used hydrological simulations from the Variable Infiltrati
 - Zhang, X.; Alexander, L.; Hegerl, G.C.; Jones, P.; Klein Tank, A.; Peterson, T.C.; Trewin, B.; Zwiers, F.W. (2011). Indices for monitoring changes in extremes based on daily temperature and precipitation data. *WIREs Climate Change*, 2(6), 851–870. https://doi.org/10.1002/wcc.147
 
 ## Data limitations and assumptions
-
-### Hazard
 
 - **Baseline period 1950–1979.** Climatological references for the hazard data, such as the per-cell marginal distributions, copulas and joint thresholds, are derived from the 1950–1979 baseline. ERA5 assimilated no satellite observations before 1979, so in regions with sparse station coverage, notably much of Africa and parts of the southern hemisphere, the baseline is less reliable. This is accepted as a known limitation.
 - **Storm subtypes the hazard data cannot characterise.** For four EM-DAT storm subtypes, ERA5 at 0.25° and daily resolution has no usable signal:
