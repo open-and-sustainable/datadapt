@@ -3,7 +3,7 @@ title: Home
 layout: default
 ---
 
-# DatAdapt
+# Open Data Project on Global Endogenous Climate Adaptation (DatAdapt)
 
 DatAdapt provides country-level data on three variables, from 1980 to 2025:
 
@@ -44,6 +44,25 @@ The pipeline is a Julia project. From the repository root:
 3. `transform_data.sh` makes the processed tables (it also holds the one-off installation of DuckDB's PRQL extension, which the transformations are written in).
 
 Each raw data page gives what its source needs.
+
+## Citation
+
+If you use DatAdapt, please cite it as:
+
+Boero, R. (2024). *Open Data Project on Global Endogenous Climate Adaptation (DatAdapt)* [Dataset]. OSF. https://doi.org/10.17605/OSF.IO/DWH98
+
+```bibtex
+@misc{boero2024datadapt,
+  author    = {Boero, Riccardo},
+  title     = {Open Data Project on Global Endogenous Climate Adaptation (DatAdapt)},
+  year      = {2024},
+  publisher = {OSF},
+  doi       = {10.17605/OSF.IO/DWH98},
+  url       = {https://doi.org/10.17605/OSF.IO/DWH98}
+}
+```
+
+Author: Riccardo Boero ([ORCID 0000-0002-7468-9096](https://orcid.org/0000-0002-7468-9096)).
 
 ## Licence
 

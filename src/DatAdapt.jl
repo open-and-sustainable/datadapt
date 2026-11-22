@@ -61,18 +61,6 @@ function fetch_hazard_data()
     HazardDataFetch.fetch_hazard_data(BASELINE_START_YEAR, END_YEAR)
 end
 
-# Write a DataFrame through DuckDB directly, so a column with missing values
-# keeps its type, with the missing values as NULL (write_duckdb_table! would
-# store such a column as strings).
-function write_table_as_is!(con::DuckDB.DB, df::DataFrame, table::String)
-    DuckDB.register_data_frame(con, df, table * "_new")
-    try
-        DBInterface.execute(con, "CREATE OR REPLACE TABLE $table AS SELECT * FROM $(table)_new")
-    finally
-        DuckDB.unregister_data_frame(con, table * "_new")
-    end
-end
-
 """
     compute_hazard_national() -> nothing
 
@@ -87,7 +75,7 @@ band is not done.
 function compute_hazard_national()
     national = HazardTransform.hazard_country_year()
     DatabaseAccess.with_connection(DB_PATH_RAW) do con
-        write_table_as_is!(con, national, "hazard")
+        DatabaseAccess.write_duckdb_table!(national, con, "hazard")
         DatabaseAccess.update_metadata!(con, "hazard", START_YEAR, END_YEAR, HAZARD_SOURCE)
     end
     logmsg("Wrote $(nrow(national)) rows to table hazard in $DB_PATH_RAW.")
@@ -133,7 +121,7 @@ function transform_data(table::String)
             "src/DataTransform/hazard_country_year.prql")
         nrow(H_processed) > 0 || error("The hazard PRQL step returned no rows; nothing written.")
         DatabaseAccess.with_connection(DB_PATH_PROCESSED) do con
-            write_table_as_is!(con, H_processed, "hazard_country_year")
+            DatabaseAccess.write_duckdb_table!(H_processed, con, "hazard_country_year")
             DatabaseAccess.update_metadata!(con, "hazard_country_year",
                 START_YEAR, END_YEAR, "derived from raw hazard table")
         end

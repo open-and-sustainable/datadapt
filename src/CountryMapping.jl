@@ -90,13 +90,18 @@ const EXPOSURE_RECODE = Dict("XKX" => "XKO")
     locate_exposure(exposure) -> DataFrame
 
 Keep only the World Bank's economies, dropping its aggregates, and recode
-those whose World Bank code differs from the one used for damage.
+those whose World Bank code differs from the one used for damage. The raw
+table keeps the API's year and value as text; they are turned into numbers
+here, so the processed table holds numbers.
 """
 function locate_exposure(exposure::DataFrame)
     aggregates = Set(CSV.read(WB_AGGREGATES_PATH, DataFrame; types = String).code)
     located = filter(row -> !ismissing(row.country_code) && !isempty(row.country_code) &&
                             !(row.country_code in aggregates), exposure)
     located.country_code = [get(EXPOSURE_RECODE, code, code) for code in located.country_code]
+    located.year = [parse(Int, string(y)) for y in located.year]
+    located.value = Union{Missing, Float64}[(v === missing || v === nothing) ? missing : parse(Float64, string(v))
+                                            for v in located.value]
     return located
 end
 

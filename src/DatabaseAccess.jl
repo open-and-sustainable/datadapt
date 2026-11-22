@@ -33,43 +33,37 @@ function escape_sql_string(value::String)::String
     return escaped_value
 end
 
-function sql_value(value)::String
-    # Convert a Julia value to a proper SQL representation
-    if value === nothing || value === missing
-        return "NULL"
-    elseif value isa String
-        return escape_sql_string(value)
-    else
-        return string(value)
-    end
-end
+# Julia column types DuckDB stores as they are. A column of any other type,
+# such as the Any columns of a spreadsheet read as is, is stored as text.
+const NATIVE_TYPES = Union{Bool, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
+                           Float32, Float64, String, Dates.Date, Dates.DateTime}
 
-function create_and_load_table_directly!(df::DataFrame, con::DuckDB.DB, table_name::String)
-    # Drop the table if it exists
-    DBInterface.execute(con, "DROP TABLE IF EXISTS $table_name")
+as_text(column) = Union{Missing, String}[(x === missing || x === nothing) ? missing : string(x)
+                                         for x in column]
 
-    # Create the table with explicit types
-    create_table_with_types!(df, con, table_name)
+"""
+    write_duckdb_table!(df, con, table_name) -> nothing
 
-    # Determine the column names and types
-    column_names = names(df)
-    column_types = eltype.(eachcol(df))
-
-    # Insert data into the table
-    for row in eachrow(df)
-        values_sql = String[]
-        for (name, _) in zip(column_names, column_types)
-            value = row[name]
-            push!(values_sql, sql_value(value))
-        end
-        insert_sql = "INSERT INTO $table_name VALUES ($(join(values_sql, ", ")))"
-        DBInterface.execute(con, insert_sql)
-    end
-
-end
-
+Write `df` to the table `table_name`, replacing any table of that name. Each
+column keeps its type, with missing values as NULL; a column of a type DuckDB
+does not store natively is written as text.
+"""
 function write_duckdb_table!(df::DataFrame, con::DuckDB.DB, table_name::String)
-    create_and_load_table_directly!(df, con, table_name)
+    out = DataFrame()
+    for name in names(df)
+        column = df[!, name]
+        T = nonmissingtype(eltype(column))
+        out[!, name] = (T !== Union{} && T <: NATIVE_TYPES) ? column : as_text(column)
+    end
+    view = table_name * "_new"
+    DuckDB.register_data_frame(con, out, view)
+    try
+        DBInterface.execute(con,
+            "CREATE OR REPLACE TABLE \"$table_name\" AS SELECT * FROM \"$view\"")
+    finally
+        DuckDB.unregister_data_frame(con, view)
+    end
+    return nothing
 end
 
 # Record (or refresh) the period and provenance of a table in the
@@ -97,33 +91,6 @@ function update_metadata!(con::DuckDB.DB, table_name::String,
     DBInterface.execute(con,
         "INSERT INTO metadata VALUES ($(escape_sql_string(table_name)), " *
         "$start_year, $end_year, $(escape_sql_string(source)), DATE '$(Dates.today())')")
-end
-
-function create_table_with_types!(df::DataFrame, con::DuckDB.DB, table_name::String)
-    # Determine the column names and types
-    column_names = names(df)
-    column_types = eltype.(eachcol(df))
-
-    # Map Julia types to SQL types
-    type_map = Dict(
-        Int => "INTEGER",
-        Float64 => "DOUBLE",
-        String => "STRING",
-        Bool => "BOOLEAN",
-        Dates.Date => "DATE",
-        Dates.DateTime => "TIMESTAMP"
-        # Add more mappings as needed
-    )
-
-    # Construct the CREATE TABLE statement with quoted column names and SQL types
-    columns_sql = String[]
-    for (name, col_type) in zip(column_names, column_types)
-        quoted_name = "\"" * name * "\""  # Quote the column name
-        sql_type = get(type_map, col_type, "STRING")  # Default to STRING if type is not mapped
-        push!(columns_sql, "$quoted_name $sql_type")
-    end
-    create_table_sql = "CREATE TABLE $table_name ($(join(columns_sql, ", ")))"
-    DBInterface.execute(con, create_table_sql)
 end
 
 function installPRQL_DuckDBextension()

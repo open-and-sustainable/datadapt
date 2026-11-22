@@ -658,3 +658,37 @@ end
         @test got[] == 1
     end
 end
+
+@testset "Tables and country codes" begin
+    @testset "table writer keeps column types" begin
+        DB = DatAdapt.DatabaseAccess
+        con = DatAdapt.DuckDB.DB()
+        df = DataFrame(sums = [1.5, missing], year = Int32[1980, 1981], count = [3, missing],
+                       code = ["FRA", "NOR"], mixed = Any[1, "a"], none = [missing, missing])
+        DB.write_duckdb_table!(df, con, "t")
+        types = DataFrame(DatAdapt.DBInterface.execute(con,
+            "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 't'"))
+        @test Dict(zip(types.column_name, types.data_type)) == Dict("sums" => "DOUBLE",
+            "year" => "INTEGER", "count" => "BIGINT", "code" => "VARCHAR",
+            "mixed" => "VARCHAR", "none" => "VARCHAR")
+        back = DataFrame(DatAdapt.DBInterface.execute(con, "SELECT * FROM t ORDER BY year"))
+        @test isequal(back.sums, [1.5, missing]) && isequal(back.count, [3, missing])
+        @test back.mixed == ["1", "a"] && all(ismissing, back.none)
+        # A second write replaces the table
+        DB.write_duckdb_table!(DataFrame(code = ["SWE"]), con, "t")
+        @test DataFrame(DatAdapt.DBInterface.execute(con, "SELECT * FROM t")).code == ["SWE"]
+        DatAdapt.DBInterface.close!(con)
+    end
+
+    @testset "exposure values become numbers" begin
+        raw = DataFrame(country_name = ["Norway", "World", "Kosovo", "Aruba"],
+                        country_code = ["NOR", "WLD", "XKX", "ABW"],
+                        year = ["1980", "1980", "2001", "1980"],
+                        value = ["4085620", "4.4e9", missing, "1.5e-1"],
+                        indicator = fill("SP.POP.TOTL", 4))
+        located = DatAdapt.CountryMapping.locate_exposure(raw)
+        @test located.country_code == ["NOR", "XKO", "ABW"]
+        @test located.year == [1980, 2001, 1980] && eltype(located.year) == Int
+        @test isequal(located.value, [4085620.0, missing, 0.15])
+    end
+end
