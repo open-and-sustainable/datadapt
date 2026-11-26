@@ -128,6 +128,108 @@ function compute_hazard_national()
     return nothing
 end
 
+# Deaths and injuries of the processed damage table are valued in money
+# (docs/processed/damage.md). A death is worth the life years the country's
+# population had left that year, each valued at the country's GNI per capita of
+# the year and discounted at DISCOUNT_RATE; a conservative lower bound for the
+# value of a statistical life (VSL).
+const DISCOUNT_RATE = 0.03
+# An injury is worth INJURY_SHARE of a death: the value of a moderate injury
+# (MAIS 2) in US Department of Transportation, Departmental Guidance: Treatment
+# of the Value of Preventing Fatalities and Injuries in Preparing Economic
+# Analyses (March 2021), Table 2.
+const INJURY_SHARE = 0.047
+# GNI per capita, Atlas method (current US$), from the raw exposure table
+const GNI_PER_CAPITA = "NY.GNP.PCAP.CD"
+# The World Bank has no GNI per capita for Taiwan or North Korea, and their
+# neighbours' are far from theirs, so their losses are not valued.
+const NOT_VALUED = Set(["TWN", "PRK"])
+
+# The present value of T years, one a year from now, at rate r: what a
+# death costs in years of income
+present_years(T::Real, r::Real) = (1 - (1 + r)^(-T)) / r
+
+"""
+    discounted_life_years(rows, r) -> Dict{Tuple{String, Int}, Float64}
+
+The present value of the life years a death costs in each country and year,
+at rate `r`: `present_years` of the life expectancy at each age, averaged with
+the population of each age as weights, so a victim is taken to be of the
+population's age. `rows` holds `code`, `year`, the population `pop` and the
+life expectancy `ex` of each age; a country that several rows' codes belong
+to (France with its overseas departments) is averaged over all of them.
+"""
+function discounted_life_years(rows::DataFrame, r::Real)
+    totals = Dict{Tuple{String, Int}, Tuple{Float64, Float64}}()
+    for row in eachrow(rows)
+        key = (String(row.code), Int(row.year))
+        weighted, pop = get(totals, key, (0.0, 0.0))
+        totals[key] = (weighted + row.pop * present_years(row.ex, r), pop + row.pop)
+    end
+    return Dict(key => weighted / pop for (key, (weighted, pop)) in totals if pop > 0)
+end
+
+"""
+    value_human_losses(damage) -> DataFrame
+
+Add to the processed damage table the money value of its deaths and injuries,
+in thousands of US dollars at EM-DAT's constant prices like
+`total_damage_adjusted`:
+
+- `vsl`: the value of one death in the country and year, its discounted life
+  years times its GNI per capita, brought to constant prices with EM-DAT's
+  `CPI` (× 100 / CPI);
+- `deaths_value` and `injuries_value`: `total_deaths` × `vsl` and
+  `total_injured` × INJURY_SHARE × `vsl`;
+- `total_damage_monetized`: `total_damage_adjusted` + `deaths_value` +
+  `injuries_value`.
+
+A country and year with no GNI per capita, or no life table, takes the average
+of its land neighbours, or the nearest country's for an island
+(`CountryMapping.fill_from_map`). The columns are empty for the countries in
+NOT_VALUED.
+"""
+function value_human_losses(damage::DataFrame)
+    exposure, rows = DatabaseAccess.with_connection(DB_PATH_RAW; readonly = true) do con
+        (DataFrame(DBInterface.execute(con,
+             "SELECT * FROM exposure WHERE indicator = '$GNI_PER_CAPITA'")),
+         DataFrame(DBInterface.execute(con, """
+             SELECT p.ISO3_code AS code, p.Time AS year, p.PopTotal AS pop, l.ex AS ex
+             FROM population_by_age p
+             JOIN life_expectancy_by_age l USING (ISO3_code, Time, AgeGrpStart)""")))
+    end
+    exposure = CountryMapping.locate_exposure(exposure)
+    gni = Dict((row.country_code, row.year) => row.value
+               for row in eachrow(exposure) if !ismissing(row.value))
+    un_codes = CountryMapping.life_table_codes(HazardDataFetch.HAZARD_UNITS_PATH)
+    on_map = Dict(zip(un_codes.un_code, un_codes.code))
+    rows.code = [get(on_map, code, code) for code in rows.code]
+    life_years = discounted_life_years(rows, DISCOUNT_RATE)
+
+    country_years = [(String(row.ISO), Int(row."Start Year")) for row in eachrow(damage)]
+    filled = [!(code in NOT_VALUED) && !(haskey(gni, (code, year)) && haskey(life_years, (code, year)))
+              for (code, year) in country_years]
+    lacking = unique(first.(country_years[filled]))
+    neighbours = isempty(lacking) ? Dict{String, NamedTuple}() :
+        HazardDataFetch.map_neighbours(lacking)
+
+    valued = copy(damage)
+    valued.vsl = map(zip(country_years, damage.CPI)) do ((code, year), cpi)
+        code in NOT_VALUED && return missing
+        income = CountryMapping.fill_from_map(gni, code, year, neighbours)
+        years = CountryMapping.fill_from_map(life_years, code, year, neighbours)
+        return years * income * 100 / cpi / 1000
+    end
+    valued.deaths_value = valued.total_deaths .* valued.vsl
+    valued.injuries_value = valued.total_injured .* INJURY_SHARE .* valued.vsl
+    valued.total_damage_monetized =
+        valued.total_damage_adjusted .+ valued.deaths_value .+ valued.injuries_value
+    logmsg("Valued deaths and injuries of $(nrow(valued)) rows; $(count(filled)) rows take " *
+           "neighbouring countries' GNI per capita or life table, " *
+           "$(count(ismissing, valued.vsl)) are not valued.")
+    return valued
+end
+
 function transform_data(table::String)
     if table == "damage"
         # Process the "damage" table, with each event assigned to the
@@ -139,10 +241,15 @@ function transform_data(table::String)
         D_processed = DatabaseAccess.executePRQL(DB_PATH_DAMAGE,
             "src/DataTransform/damage_country_event_year.prql";
             tables = Dict("damage_located" => located))
+        nrow(D_processed) > 0 || error("The damage PRQL step returned no rows; nothing written.")
+        D_processed = value_human_losses(D_processed)
         DatabaseAccess.with_connection(DB_PATH_PROCESSED) do con
             DatabaseAccess.write_duckdb_table!(D_processed, con, "damage_country_event_year")
             DatabaseAccess.update_metadata!(con, "damage_country_event_year",
-                START_YEAR, END_YEAR, "Derived from the raw damage table. Source: " * DAMAGE_SOURCE)
+                START_YEAR, END_YEAR,
+                "Derived from the raw tables damage, population_by_age, " *
+                "life_expectancy_by_age and exposure. Sources: " * DAMAGE_SOURCE *
+                "; " * WPP_SOURCE * "; " * EXPOSURE_SOURCE)
         end
     elseif table == "exposure"
         # Process the "exposure" table, countries only, with codes aligned

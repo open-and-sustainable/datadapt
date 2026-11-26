@@ -752,3 +752,75 @@ end
         @test df.PopTotal == [50.0, 0.3, 2.5]
     end
 end
+
+@testset "Valuing deaths and injuries" begin
+    CM = DatAdapt.CountryMapping
+
+    @testset "life years in present value" begin
+        @test DatAdapt.present_years(1, 0.03) ≈ 1 / 1.03
+        @test DatAdapt.present_years(2, 0.03) ≈ 1 / 1.03 + 1 / 1.03^2
+        @test DatAdapt.present_years(1000, 0.03) ≈ 1 / 0.03
+        # Averaged with the population of each age as weights, over every
+        # code that belongs to the country
+        rows = DataFrame(code = ["FRA", "FRA", "FRA", "NOR"], year = [2000, 2000, 2000, 2000],
+                         pop = [3.0, 1.0, 4.0, 2.0], ex = [10.0, 40.0, 20.0, 5.0])
+        ly = DatAdapt.discounted_life_years(rows, 0.03)
+        pv(T) = DatAdapt.present_years(T, 0.03)
+        @test ly[("FRA", 2000)] ≈ (3 * pv(10) + 1 * pv(40) + 4 * pv(20)) / 8
+        @test ly[("NOR", 2000)] ≈ pv(5)
+    end
+
+    @testset "UN codes on the country map" begin
+        path = joinpath(mktempdir(), "units.csv")
+        write(path, """
+            gadm_code,gadm_name,code,note
+            FRA,France,FRA,
+            GLP,Guadeloupe,FRA,merged
+            ATA,Antarctica,,not a country
+            CHN.HKG,Hong Kong,HKG,
+            XKO,Kosovo,XKO,
+            """)
+        codes = CM.life_table_codes(path)
+        @test Dict(zip(codes.un_code, codes.code)) == Dict("GLP" => "FRA", "XKX" => "XKO")
+    end
+
+    @testset "missing values from neighbours" begin
+        values = Dict(("AAA", 2000) => 10.0, ("BBB", 2000) => 30.0, ("CCC", 2000) => 50.0,
+                      ("AAA", 2001) => 12.0)
+        neighbours = Dict(
+            "XXX" => (touching = Set(["AAA", "BBB", "DDD"]), by_distance = ["AAA", "BBB", "CCC", "DDD"]),
+            "III" => (touching = Set{String}(), by_distance = ["DDD", "CCC", "AAA", "BBB"]))
+        # Its own value first
+        @test CM.fill_from_map(values, "AAA", 2000, neighbours) == 10.0
+        # The neighbours that have a value that year, averaged
+        @test CM.fill_from_map(values, "XXX", 2000, neighbours) == 20.0
+        # None of the neighbours has one: the nearest country that has
+        @test CM.fill_from_map(values, "XXX", 2001, neighbours) == 12.0
+        # An island takes the nearest country that has a value
+        @test CM.fill_from_map(values, "III", 2000, neighbours) == 50.0
+        @test ismissing(CM.fill_from_map(values, "III", 1999, neighbours))
+        @test ismissing(CM.fill_from_map(values, "ZZZ", 2000, neighbours))
+    end
+
+    @testset "neighbours on the map" begin
+        geom = DatAdapt.HazardDataFetch.LibGEOS.readgeom
+        square(code, w, s, e, n) = HDF.unit_feature(code,
+            geom("POLYGON(($w $s, $e $s, $e $n, $w $n, $w $s))"))
+        features = [
+            square("AAA", 0, 0, 1, 1),
+            square("BBB", 1, 0, 2, 1),          # shares a border with AAA
+            square("FFF", 0, 1.005, 1, 2),      # a gap smaller than NEIGHBOUR_GAP
+            square("GGG", -1, 0, -0.02, 1),     # a strait wider than it
+            square("CCC", 3, 0, 3.5, 0.5),      # an island
+            square("DDD", 179, 0, 179.5, 0.5),  # either side of the antimeridian
+            square("EEE", -179.8, 0, -179.5, 0.5),
+            square("EEE", 170, 0, 170.5, 0.5)]  # a second, farther unit
+        nb = HDF.map_neighbours(["AAA", "CCC", "DDD", "EEE", "ZZZ"], features)
+        @test nb["AAA"].touching == Set(["BBB", "FFF"])
+        @test nb["AAA"].by_distance[1:3] == ["BBB", "FFF", "GGG"]
+        @test isempty(nb["CCC"].touching) && nb["CCC"].by_distance[1] == "BBB"
+        @test nb["DDD"].by_distance[1] == "EEE" && nb["EEE"].by_distance[1] == "DDD"
+        @test count(==("EEE"), nb["DDD"].by_distance) == 1
+        @test !haskey(nb, "ZZZ")
+    end
+end

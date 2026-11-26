@@ -392,6 +392,62 @@ function load_unit_features()
     return features
 end
 
+# Neighbours on the map are found on outlines simplified to SIMPLIFY_TOLERANCE
+# degrees. A border simplified on each side need not meet, so countries whose
+# outlines come within NEIGHBOUR_GAP, twice the tolerance (about 1 km), share
+# a land border; the rare strait narrower than that counts as one.
+const SIMPLIFY_TOLERANCE = 0.005
+const NEIGHBOUR_GAP = 2 * SIMPLIFY_TOLERANCE + 1e-9
+
+# Distance between two outlines, in degrees, with an index of their segments:
+# much faster than LibGEOS.distance on large outlines.
+function outline_distance(a, b)
+    out = Ref{Float64}()
+    LibGEOS.GEOSDistanceIndexed_r(LibGEOS.get_context(a), a, b, out) == 0 &&
+        error("GEOS could not compute a distance")
+    return out[]
+end
+
+# The outline moved by `shift` degrees of longitude
+function shift_longitude(geom, shift::Float64)
+    move(ring) = [[point[1] + shift, point[2]] for point in ring]
+    coords = GeoInterface.coordinates(geom)
+    polygons = GeoInterface.geomtrait(geom) isa GeoInterface.PolygonTrait ? [coords] : coords
+    return LibGEOS.MultiPolygon([[move(ring) for ring in polygon] for polygon in polygons])
+end
+
+"""
+    map_neighbours(codes, features = load_unit_features()) -> Dict{String, NamedTuple}
+
+For each country in `codes`, its land neighbours on the map (`touching`) and
+every other country of the map, nearest first (`by_distance`), from which
+`CountryMapping.fill_from_map` fills a value the country lacks. A country of
+several units, such as France with its overseas departments, is as near as its
+nearest unit. Distances are in degrees between the outlines, across the
+antimeridian where that is shorter.
+"""
+function map_neighbours(codes::AbstractVector{<:AbstractString}, features = load_unit_features())
+    outlines = [(code = f.iso3,
+                 geom = LibGEOS.topologyPreserveSimplify(f.geom, SIMPLIFY_TOLERANCE))
+                for f in features]
+    result = Dict{String, NamedTuple}()
+    for code in codes
+        own = [o.geom for o in outlines if o.code == code]
+        isempty(own) && continue
+        own = vcat(own, [shift_longitude(g, shift) for g in own for shift in (-360.0, 360.0)])
+        distance = Dict{String, Float64}()
+        for o in outlines
+            o.code == code && continue
+            d = minimum(outline_distance(g, o.geom) for g in own)
+            distance[o.code] = min(get(distance, o.code, Inf), d)
+        end
+        others = sort(collect(keys(distance)); by = c -> (distance[c], c))
+        result[code] = (touching = Set(c for c in others if distance[c] <= NEIGHBOUR_GAP),
+                        by_distance = others)
+    end
+    return result
+end
+
 """
     get_unit_assignment(nc_path) -> Dict{String, NamedTuple}
 

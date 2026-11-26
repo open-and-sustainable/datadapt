@@ -4,7 +4,7 @@ using CSV
 using DataFrames
 using JSON
 
-export locate_damage_events, locate_exposure
+export locate_damage_events, locate_exposure, life_table_codes, fill_from_map
 
 # EM-DAT events coded to states that no longer exist, each assigned to the
 # present-day country it occurred in. Reviewed by hand, event by event: the
@@ -103,6 +103,54 @@ function locate_exposure(exposure::DataFrame)
     located.value = Union{Missing, Float64}[(v === missing || v === nothing) ? missing : parse(Float64, string(v))
                                             for v in located.value]
     return located
+end
+
+# UN World Population Prospects codes that differ from GADM's.
+const LIFE_TABLE_RECODE = Dict("XKX" => "XKO")
+
+"""
+    life_table_codes(units_path) -> DataFrame
+
+The country of the shared map that each UN life-table code belongs to, for the
+UN codes that differ from it (`un_code`, `code`): territories the map merges
+into another country, as listed in the map table at `units_path` (France's
+overseas departments, Jersey and Guernsey), and Kosovo, which the UN codes
+`XKX`. The UN's other codes are the map's.
+"""
+function life_table_codes(units_path::String)
+    units = CSV.read(units_path, DataFrame; types = String)
+    codes = DataFrame(un_code = String[], code = String[])
+    for row in eachrow(units)
+        (ismissing(row.code) || occursin('.', row.gadm_code) || row.gadm_code == row.code) && continue
+        push!(codes, (row.gadm_code, row.code))
+    end
+    for (un_code, code) in LIFE_TABLE_RECODE
+        push!(codes, (un_code, code))
+    end
+    return codes
+end
+
+"""
+    fill_from_map(values, code, year, neighbours) -> Union{Missing, Float64}
+
+A country's value in a year, from `values`, keyed by (country, year), where it
+has one. Otherwise the average of the values its land neighbours have in that
+year or, for an island or a country none of whose neighbours has one, the value
+of the nearest country that has one. `neighbours[code]` holds the country's
+land neighbours (`touching`) and every other country, nearest first
+(`by_distance`), as `HazardDataFetch.map_neighbours` gives them; a country not
+on the map gets no value.
+"""
+function fill_from_map(values::AbstractDict, code::AbstractString, year::Integer,
+                       neighbours::AbstractDict)
+    haskey(values, (code, year)) && return values[(code, year)]
+    haskey(neighbours, code) || return missing
+    around = [values[(c, year)] for c in neighbours[code].touching if haskey(values, (c, year))]
+    isempty(around) || return sum(around) / length(around)
+    for c in neighbours[code].by_distance
+        haskey(values, (c, year)) && return values[(c, year)]
+    end
+    return missing
 end
 
 end # module CountryMapping

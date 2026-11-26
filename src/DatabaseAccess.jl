@@ -9,9 +9,13 @@ export write_duckdb_table!, executePRQL, with_connection
 # Open db_path, run f(con), and guarantee the connection is closed
 # afterwards. Writes that must land in the same durability unit (e.g.
 # a table write followed by its metadata update) should share the
-# connection passed into f rather than opening the file again.
-function with_connection(f::Function, db_path::String)
-    con = DuckDB.DB(db_path)
+# connection passed into f rather than opening the file again. Open with
+# `readonly = true` to only read: DuckDB rewrites a file it opened for
+# writing when it closes it, even if nothing changed.
+function with_connection(f::Function, db_path::String; readonly::Bool = false)
+    config = DuckDB.Config()
+    readonly && DuckDB.set_config(config, "access_mode", "READ_ONLY")
+    con = DuckDB.DB(db_path, config)
     try
         return f(con)
     finally

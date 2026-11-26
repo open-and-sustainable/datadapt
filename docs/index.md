@@ -11,7 +11,7 @@ DatAdapt provides country-level data on three variables, from 1980 to 2025:
 - **damage**: the disasters recorded in EM-DAT and their human and economic losses;
 - **exposure**: population, area and economy, from the World Bank's World Development Indicators.
 
-The three variables are kept independent: none of them is weighted by, or derived from, another. How they are combined is left to the analyses that use them.
+The three variables are kept independent: none of them is weighted by, or derived from, another. The one exception is the money value of deaths and injuries in the [processed damage data](processed/damage.html#step-3-deaths-and-injuries-in-money), which uses each country's GNI per capita. How the variables are combined is left to the analyses that use them.
 
 The project is registered at the OSF, [doi:10.17605/OSF.IO/DWH98](https://doi.org/10.17605/OSF.IO/DWH98).
 
