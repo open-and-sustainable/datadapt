@@ -44,3 +44,20 @@ One row per EM-DAT record, with EM-DAT's 47 columns under their EM-DAT names, un
 
 1. Export the climatological, hydrological and meteorological natural disasters from the EM-DAT data portal (registration required) as an Excel file, and save it as `DatAdapt-database/raw/clima-hydro-meteo_EM-DAT.xlsx`.
 2. Run `fetch_damage_data` (in `fetch_data.sh`), which reads the excerpt, keeps the records of 1980–2025 and writes the table `damage`.
+
+## Population and life expectancy by age
+
+Two further raw tables, in `DatAdapt-database/raw/DatAdapt.duckdb`, give the population and life expectancy of every country by single year of age, from which the processed damage data value the life years lost to disaster deaths. They come from the UN World Population Prospects 2024 ([population.un.org/wpp](https://population.un.org/wpp/)), for both sexes together: estimates to 2023 and, for 2024 and 2025, the medium-variant projections. Both cover 237 countries and areas, 1980–2025 and ages 0 to 100, 1,101,102 rows each; the UN's regional and other aggregates are left out.
+
+| Table | Column | Content |
+|---|---|---|
+| both | `ISO3_code` | ISO 3166 alpha-3 code of the country or area |
+| both | `Location` | The UN's name for it |
+| both | `Time` | Year, 1980–2025 |
+| both | `AgeGrpStart` | Age in completed years, 0–100; 100 stands for 100 and over |
+| `population_by_age` | `PopTotal` | Population on 1 July, in thousands |
+| `life_expectancy_by_age` | `ex` | Life expectancy at that age, in years, from the UN's complete life table |
+
+The UN's interim update of January 2026 revises only Togo's population counts, not its mortality, and is not used.
+
+Run `fetch_life_table_data` (in `fetch_data.sh`) to reproduce both tables. It downloads four files of about 530 MB in all from the UN (`WPP2024_PopulationBySingleAgeSex_Medium_1950-2023.csv.gz`, `..._2024-2100.csv.gz`, `WPP2024_Life_Table_Complete_Medium_Both_1950-2023.csv.gz` and `..._2024-2100.csv.gz`) and keeps the countries and years above.

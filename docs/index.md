@@ -21,7 +21,7 @@ The data come in two DuckDB databases, distributed separately from the code in t
 
 | Database | Tables | Content |
 |---|---|---|
-| `raw/DatAdapt.duckdb` | [`hazard`](raw/hazard.html), [`exposure`](raw/exposure.html) | The data as fetched from each source, or for hazard as computed from it |
+| `raw/DatAdapt.duckdb` | [`hazard`](raw/hazard.html), [`population_by_age` and `life_expectancy_by_age`](raw/damage.html#population-and-life-expectancy-by-age) (for damage), [`exposure`](raw/exposure.html) | The data as fetched from each source, or for hazard as computed from it |
 | `processed/DatAdapt.duckdb` | [`hazard_country_year`](processed/hazard.html), [`damage_country_event_year`](processed/damage.html), [`exposure_country_year`](processed/exposure.html) | The raw tables on one country map, in the shape used for analysis |
 
 The raw table `damage` is not included, because EM-DAT's licence does not allow redistributing its records; its [page](raw/damage.html) gives the steps to build it, in the local file `raw/DatAdapt_damage.duckdb`.
@@ -70,6 +70,7 @@ Author: Riccardo Boero ([ORCID 0000-0002-7468-9096](https://orcid.org/0000-0002-
 
 - **Hazard:** Copernicus Climate Change Service, Climate Data Store (2024): ERA5 post-processed daily statistics on single levels from 1940 to present. Copernicus Climate Change Service (C3S) Climate Data Store (CDS). [https://doi.org/10.24381/cds.4991cf48](https://doi.org/10.24381/cds.4991cf48) (accessed in 2026). Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 - **Damage:** Emergency Events Database (EM-DAT), UCLouvain / CRED, Brussels, Belgium, version 2026-07-17, accessed on 2026-07-20, [https://www.emdat.be/](https://www.emdat.be/). Delforge, D., Wathelet, V., Below, R., Lanfredi Sofia, C., Tonnelier, M., van Loenhout, J. A. F., & Speybroeck, N. (2025). EM-DAT: The Emergency Events Database. *International Journal of Disaster Risk Reduction*, 124, 105509. [https://doi.org/10.1016/j.ijdrr.2025.105509](https://doi.org/10.1016/j.ijdrr.2025.105509)
+- **Damage (population and life expectancy by age):** United Nations, Department of Economic and Social Affairs, Population Division (2024). *World Population Prospects 2024, Online Edition*. [https://population.un.org/wpp/](https://population.un.org/wpp/) (accessed on 2026-11-26). Licensed under [CC BY 3.0 IGO](https://creativecommons.org/licenses/by/3.0/igo/).
 - **Exposure:** The World Bank: World Development Indicators, [https://datatopics.worldbank.org/world-development-indicators/](https://datatopics.worldbank.org/world-development-indicators/) (accessed on 2026-07-21). Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 ## Licence

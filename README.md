@@ -22,6 +22,7 @@ Boero, R. (2024). *Open Data Project on Global Endogenous Climate Adaptation (Da
 ## Data sources
 - **Hazard:** Copernicus Climate Change Service, Climate Data Store (2024): ERA5 post-processed daily statistics on single levels from 1940 to present. Copernicus Climate Change Service (C3S) Climate Data Store (CDS). https://doi.org/10.24381/cds.4991cf48 (accessed in 2026). Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 - **Damage:** Emergency Events Database (EM-DAT), UCLouvain / CRED, Brussels, Belgium, version 2026-07-17, accessed on 2026-07-20, https://www.emdat.be/. Delforge, D., Wathelet, V., Below, R., Lanfredi Sofia, C., Tonnelier, M., van Loenhout, J. A. F., & Speybroeck, N. (2025). EM-DAT: The Emergency Events Database. *International Journal of Disaster Risk Reduction*, 124, 105509. https://doi.org/10.1016/j.ijdrr.2025.105509
+- **Damage (population and life expectancy by age):** United Nations, Department of Economic and Social Affairs, Population Division (2024). *World Population Prospects 2024, Online Edition*. https://population.un.org/wpp/ (accessed on 2026-11-26). Licensed under [CC BY 3.0 IGO](https://creativecommons.org/licenses/by/3.0/igo/).
 - **Exposure:** The World Bank: World Development Indicators, https://datatopics.worldbank.org/world-development-indicators/ (accessed on 2026-07-21). Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 ## License

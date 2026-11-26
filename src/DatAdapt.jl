@@ -78,6 +78,27 @@ function fetch_damage_data()
     end
 end
 
+const WPP_SOURCE = "United Nations, Department of Economic and Social Affairs, " *
+    "Population Division (2024). World Population Prospects 2024, Online " *
+    "Edition. https://population.un.org/wpp/, licensed under CC BY 3.0 IGO; " *
+    "estimates to 2023, medium-variant projections from 2024"
+
+# Population and life expectancy by single age, for the life years lost to
+# disaster deaths in the damage domain. The UN files are large (about 530
+# MB); pass `dir` to keep them between runs.
+function fetch_life_table_data(; dir::String = mktempdir())
+    population, life_expectancy =
+        DamageDataFetch.fetch_life_table_data(START_YEAR, END_YEAR; dir = dir)
+    DatabaseAccess.with_connection(DB_PATH_RAW) do con
+        DatabaseAccess.write_duckdb_table!(population, con, "population_by_age")
+        DatabaseAccess.update_metadata!(con, "population_by_age", START_YEAR, END_YEAR,
+            WPP_SOURCE)
+        DatabaseAccess.write_duckdb_table!(life_expectancy, con, "life_expectancy_by_age")
+        DatabaseAccess.update_metadata!(con, "life_expectancy_by_age", START_YEAR, END_YEAR,
+            WPP_SOURCE)
+    end
+end
+
 # Hazard comes in two steps. The fetch only downloads the ERA5 grids, for the
 # baseline 1950-1979 and the main period alike, since the national values are
 # computed from the grids cell by cell; compute_hazard_national then writes

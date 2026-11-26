@@ -727,4 +727,28 @@ end
         @test located.year == [1980, 2001, 1980] && eltype(located.year) == Int
         @test isequal(located.value, [4085620.0, missing, 0.15])
     end
+
+    @testset "UN population files keep countries only" begin
+        dir = mktempdir()
+        header = "SortOrder,LocID,Notes,ISO3_code,ISO2_code,SDMX_code,LocTypeID," *
+                 "LocTypeName,ParentID,Location,VarID,Variant,Time,MidPeriod," *
+                 "AgeGrp,AgeGrpStart,AgeGrpSpan,PopMale,PopFemale,PopTotal"
+        write(joinpath(dir, "a.csv"), """
+            ﻿$header
+            ,1200,,,,,,,,"African, Caribbean and Pacific (ACP) Group of States",2,Medium,1980,1980,0,0,1,1,1,2
+            ,578,,NOR,NO,578,4,Country/Area,924,Norway,2,Medium,1979,1979,0,0,1,1,1,2
+            ,578,,NOR,NO,578,4,Country/Area,924,Norway,2,Medium,1980,1980,100+,100,-1,0.1,0.2,0.3
+            ,578,,NOR,NO,578,4,Country/Area,924,Norway,2,Medium,1980,1980,0,0,1,25.5,24.5,50
+            """)
+        write(joinpath(dir, "b.csv"), """
+            $header
+            ,834,3,TZA,TZ,834,4,Country/Area,910,"Tanzania, United Republic of",2,Medium,2024,2024,0,0,1,1,1,2.5
+            """)
+        df = DatAdapt.DamageDataFetch.read_wpp(joinpath.(dir, ["a.csv", "b.csv"]),
+                                                "PopTotal", 1980, 2025)
+        @test df.ISO3_code == ["NOR", "NOR", "TZA"]
+        @test df.Location[3] == "Tanzania, United Republic of"
+        @test df.Time == [1980, 1980, 2024] && df.AgeGrpStart == [0, 100, 0]
+        @test df.PopTotal == [50.0, 0.3, 2.5]
+    end
 end
