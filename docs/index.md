@@ -66,4 +66,4 @@ Author: Riccardo Boero ([ORCID 0000-0002-7468-9096](https://orcid.org/0000-0002-
 
 ## Licence
 
-The software is licensed under the [MIT license](https://github.com/open-and-sustainable/datadapt/blob/main/LICENSE). The resulting data is licensed under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/). Hazard data are generated using Copernicus Climate Change Service information. Damage data come from EM-DAT, CRED / UCLouvain ([www.emdat.be](https://www.emdat.be)), and exposure data from the World Bank's World Development Indicators.
+The software is licensed under the [MIT license](https://github.com/open-and-sustainable/datadapt/blob/main/LICENSE). The resulting data is licensed under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/). Hazard data are generated using Copernicus Climate Change Service information 2026. Damage data come from EM-DAT, CRED / UCLouvain ([www.emdat.be](https://www.emdat.be)), and exposure data from the World Bank's World Development Indicators.

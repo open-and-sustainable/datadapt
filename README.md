@@ -23,4 +23,4 @@ Boero, R. (2024). *Open Data Project on Global Endogenous Climate Adaptation (Da
 The software in this repository is licensed under the [MIT license](LICENSE).
 
 The resulting data is licensed under the [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) license.
-Generated using Copernicus Climate Change Service information 2024.
+Generated using Copernicus Climate Change Service information 2026.
