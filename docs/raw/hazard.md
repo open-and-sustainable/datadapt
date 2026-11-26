@@ -5,7 +5,7 @@ layout: default
 
 # Raw hazard data
 
-The raw table `hazard` (in `DatAdapt-database/raw/DatAdapt.duckdb`) characterises eight hazard event types in every country and year from 1980 to 2025: 207 countries, 46 years and 8 event types, 76,176 rows. Each value is computed from the ERA5 reanalysis grids, cell by cell, as described below.
+The raw table `hazard` (in `DatAdapt-database/raw/DatAdapt.duckdb`) characterises eight hazard event types in every country and year from 1980 to 2025: 241 countries, 46 years and 8 event types, 88,688 rows. Each value is computed from the ERA5 reanalysis grids, cell by cell, as described below.
 
 ## Table `hazard`
 
