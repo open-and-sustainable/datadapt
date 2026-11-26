@@ -21,10 +21,10 @@ The data come in two DuckDB databases, distributed separately from the code in t
 
 | Database | Tables | Content |
 |---|---|---|
-| `raw/DatAdapt.duckdb` | [`hazard`](raw/hazard.html), [`damage`](raw/damage.html) (not distributed), [`exposure`](raw/exposure.html) | The data as fetched from each source, or for hazard as computed from it |
+| `raw/DatAdapt.duckdb` | [`hazard`](raw/hazard.html), [`exposure`](raw/exposure.html) | The data as fetched from each source, or for hazard as computed from it |
 | `processed/DatAdapt.duckdb` | [`hazard_country_year`](processed/hazard.html), [`damage_country_event_year`](processed/damage.html), [`exposure_country_year`](processed/exposure.html) | The raw tables on one country map, in the shape used for analysis |
 
-The raw table `damage` is not included, because EM-DAT's licence does not allow redistributing its records; its [page](raw/damage.html) gives the steps to build it.
+The raw table `damage` is not included, because EM-DAT's licence does not allow redistributing its records; its [page](raw/damage.html) gives the steps to build it, in the local file `raw/DatAdapt_damage.duckdb`.
 
 Each database also has a table `metadata`, with one row per table: `table_name`, the years it covers (`start_year`, `end_year`), its `source` and the date it was last `updated`.
 

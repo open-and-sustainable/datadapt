@@ -15,6 +15,9 @@ const BASELINE_START_YEAR = 1950
 # Define the database paths as constants
 const DB_PATH_RAW = "DatAdapt-database/raw/DatAdapt.duckdb"
 const DB_PATH_PROCESSED = "DatAdapt-database/processed/DatAdapt.duckdb"
+# The raw EM-DAT records live in their own local file, which the dataset
+# repository ignores: EM-DAT's licence does not allow redistributing them
+const DB_PATH_DAMAGE = "DatAdapt-database/raw/DatAdapt_damage.duckdb"
 
 # Include and use the renamed modules
 include("CDSAPI.jl")
@@ -42,7 +45,7 @@ end
 
 function fetch_damage_data()
     D_data = DamageDataFetch.fetch_damage_data(START_YEAR, END_YEAR)
-    DatabaseAccess.with_connection(DB_PATH_RAW) do con
+    DatabaseAccess.with_connection(DB_PATH_DAMAGE) do con
         DatabaseAccess.write_duckdb_table!(D_data, con, "damage")
         DatabaseAccess.update_metadata!(con, "damage", START_YEAR, END_YEAR,
             "EM-DAT, CRED / UCLouvain (www.emdat.be)")
@@ -86,11 +89,11 @@ function transform_data(table::String)
     if table == "damage"
         # Process the "damage" table, with each event assigned to the
         # present-day country it occurred in
-        damage = DatabaseAccess.with_connection(DB_PATH_RAW) do con
+        damage = DatabaseAccess.with_connection(DB_PATH_DAMAGE) do con
             DataFrame(DBInterface.execute(con, "SELECT * FROM damage"))
         end
         located = CountryMapping.locate_damage_events(damage)
-        D_processed = DatabaseAccess.executePRQL(DB_PATH_RAW,
+        D_processed = DatabaseAccess.executePRQL(DB_PATH_DAMAGE,
             "src/DataTransform/damage_country_event_year.prql";
             tables = Dict("damage_located" => located))
         DatabaseAccess.with_connection(DB_PATH_PROCESSED) do con
