@@ -7,6 +7,8 @@ layout: default
 
 The raw table `damage` (in `DatAdapt-database/raw/DatAdapt.duckdb`) lists the climate-related disasters recorded in EM-DAT, the international disaster database of CRED / UCLouvain ([www.emdat.be](https://www.emdat.be)), that started between 1980 and 2025: 12,499 events in 228 countries and territories.
 
+EM-DAT's licence does not allow redistributing its records, so the public database leaves this table out: build it with the steps [below](#how-to-reproduce-the-table).
+
 ## Source data
 
 EM-DAT records a disaster when it meets at least one of its entry criteria: 10 or more deaths, 100 or more people affected, a declared state of emergency, or a call for international assistance. A disaster that hits several countries has one record per country.

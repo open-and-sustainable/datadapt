@@ -19,8 +19,13 @@ Boero, R. (2024). *Open Data Project on Global Endogenous Climate Adaptation (Da
 }
 ```
 
+## Data sources
+- **Hazard:** Copernicus Climate Change Service, Climate Data Store (2024): ERA5 post-processed daily statistics on single levels from 1940 to present. Copernicus Climate Change Service (C3S) Climate Data Store (CDS). https://doi.org/10.24381/cds.4991cf48 (accessed in 2026). Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+- **Damage:** Emergency Events Database (EM-DAT), UCLouvain / CRED, Brussels, Belgium, version 2026-07-17, accessed on 2026-07-20, https://www.emdat.be/. Delforge, D., Wathelet, V., Below, R., Lanfredi Sofia, C., Tonnelier, M., van Loenhout, J. A. F., & Speybroeck, N. (2025). EM-DAT: The Emergency Events Database. *International Journal of Disaster Risk Reduction*, 124, 105509. https://doi.org/10.1016/j.ijdrr.2025.105509
+- **Exposure:** The World Bank: World Development Indicators, https://datatopics.worldbank.org/world-development-indicators/ (accessed on 2026-07-21). Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
 ## License
 The software in this repository is licensed under the [MIT license](LICENSE).
 
 The resulting data is licensed under the [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) license.
-Generated using Copernicus Climate Change Service information 2026.
+Generated using Copernicus Climate Change Service information 2026. Neither the European Commission nor ECMWF is responsible for any use that may be made of the Copernicus information or data it contains.

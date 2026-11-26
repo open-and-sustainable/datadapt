@@ -21,8 +21,10 @@ The data come in two DuckDB databases, distributed separately from the code in t
 
 | Database | Tables | Content |
 |---|---|---|
-| `raw/DatAdapt.duckdb` | [`hazard`](raw/hazard.html), [`damage`](raw/damage.html), [`exposure`](raw/exposure.html) | The data as fetched from each source, or for hazard as computed from it |
+| `raw/DatAdapt.duckdb` | [`hazard`](raw/hazard.html), [`damage`](raw/damage.html) (not distributed), [`exposure`](raw/exposure.html) | The data as fetched from each source, or for hazard as computed from it |
 | `processed/DatAdapt.duckdb` | [`hazard_country_year`](processed/hazard.html), [`damage_country_event_year`](processed/damage.html), [`exposure_country_year`](processed/exposure.html) | The raw tables on one country map, in the shape used for analysis |
+
+The raw table `damage` is not included, because EM-DAT's licence does not allow redistributing its records; its [page](raw/damage.html) gives the steps to build it.
 
 Each database also has a table `metadata`, with one row per table: `table_name`, the years it covers (`start_year`, `end_year`), its `source` and the date it was last `updated`.
 
@@ -64,6 +66,12 @@ Boero, R. (2024). *Open Data Project on Global Endogenous Climate Adaptation (Da
 
 Author: Riccardo Boero ([ORCID 0000-0002-7468-9096](https://orcid.org/0000-0002-7468-9096)).
 
+## Data sources
+
+- **Hazard:** Copernicus Climate Change Service, Climate Data Store (2024): ERA5 post-processed daily statistics on single levels from 1940 to present. Copernicus Climate Change Service (C3S) Climate Data Store (CDS). [https://doi.org/10.24381/cds.4991cf48](https://doi.org/10.24381/cds.4991cf48) (accessed in 2026). Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+- **Damage:** Emergency Events Database (EM-DAT), UCLouvain / CRED, Brussels, Belgium, version 2026-07-17, accessed on 2026-07-20, [https://www.emdat.be/](https://www.emdat.be/). Delforge, D., Wathelet, V., Below, R., Lanfredi Sofia, C., Tonnelier, M., van Loenhout, J. A. F., & Speybroeck, N. (2025). EM-DAT: The Emergency Events Database. *International Journal of Disaster Risk Reduction*, 124, 105509. [https://doi.org/10.1016/j.ijdrr.2025.105509](https://doi.org/10.1016/j.ijdrr.2025.105509)
+- **Exposure:** The World Bank: World Development Indicators, [https://datatopics.worldbank.org/world-development-indicators/](https://datatopics.worldbank.org/world-development-indicators/) (accessed on 2026-07-21). Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
 ## Licence
 
-The software is licensed under the [MIT license](https://github.com/open-and-sustainable/datadapt/blob/main/LICENSE). The resulting data is licensed under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/). Hazard data are generated using Copernicus Climate Change Service information 2026. Damage data come from EM-DAT, CRED / UCLouvain ([www.emdat.be](https://www.emdat.be)), and exposure data from the World Bank's World Development Indicators.
+The software is licensed under the [MIT license](https://github.com/open-and-sustainable/datadapt/blob/main/LICENSE). The resulting data is licensed under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/). Generated using Copernicus Climate Change Service information 2026. Neither the European Commission nor ECMWF is responsible for any use that may be made of the Copernicus information or data it contains.
