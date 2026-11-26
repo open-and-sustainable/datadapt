@@ -41,7 +41,7 @@ All processed tables, and the raw hazard table, use one country map, so the thre
 
 The pipeline is a Julia project. From the repository root:
 
-1. `fetch_data.sh` fetches the raw data: exposure from the World Bank API, damage from an EM-DAT excerpt, and the ERA5 grids for hazard.
+1. `fetch_data.sh` fetches the raw data: exposure from the World Bank API, damage from an EM-DAT excerpt and the UN's population and life tables, and the ERA5 grids for hazard.
 2. `compute_hazard_national.sh` computes the raw hazard table from the grids.
 3. `transform_data.sh` makes the processed tables (it also holds the one-off installation of DuckDB's PRQL extension, which the transformations are written in).
 

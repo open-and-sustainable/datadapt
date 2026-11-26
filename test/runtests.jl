@@ -716,6 +716,19 @@ end
         DatAdapt.DBInterface.close!(con)
     end
 
+    @testset "PRQL inputs leave no views behind" begin
+        dir = mktempdir()
+        db, prql = joinpath(dir, "t.duckdb"), joinpath(dir, "q.prql")
+        write(prql, "from inputs\nderive {y = x * 2}\n")
+        out = DatAdapt.DatabaseAccess.executePRQL(db, prql;
+            tables = Dict("inputs" => DataFrame(x = [1, 2])))
+        @test out.y == [2, 4]
+        con = DatAdapt.DuckDB.DB(db)
+        @test isempty(DataFrame(DatAdapt.DBInterface.execute(con,
+            "SELECT table_name FROM information_schema.tables")))
+        DatAdapt.DBInterface.close!(con)
+    end
+
     @testset "exposure values become numbers" begin
         raw = DataFrame(country_name = ["Norway", "World", "Kosovo", "Aruba"],
                         country_code = ["NOR", "WLD", "XKX", "ABW"],

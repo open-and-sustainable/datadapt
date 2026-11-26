@@ -114,14 +114,18 @@ end
 
 # `tables` makes in-memory DataFrames queryable by name alongside the
 # database's own tables, for inputs prepared in Julia before the query runs.
+# DuckDB.jl registers a DataFrame as a view in the database, so the views are
+# dropped again before the connection closes.
 function executePRQL(dbpath::String, prqlpath::String;
                      tables::Dict{String,DataFrame} = Dict{String,DataFrame}())::DataFrame
     # Create a connection to the DuckDB database
     con = DuckDB.DB(dbpath)
+    registered = String[]
 
     try
         for (name, df) in tables
             DuckDB.register_data_frame(con, df, name)
+            push!(registered, name)
         end
 
         # Load the PRQL extension
@@ -140,6 +144,9 @@ function executePRQL(dbpath::String, prqlpath::String;
         println("Error during execution: ", e)
         return DataFrame()  # Return an empty DataFrame in case of error
     finally
+        for name in registered
+            DuckDB.unregister_data_frame(con, name)
+        end
         # Ensure the database connection is closed
         DBInterface.close!(con)
     end
