@@ -11,15 +11,17 @@ The raw table `exposure` (in `DatAdapt-database/raw/DatAdapt.duckdb`) holds seve
 
 The indicators are downloaded from the World Bank API (`https://api.worldbank.org/v2/country/all/indicator/<code>`), for every economy and aggregate the API returns: 265 for each indicator and year.
 
-| Indicator | Name | Unit |
-|---|---|---|
-| `SP.POP.TOTL` | Population, total | people |
-| `AG.SRF.TOTL.K2` | Surface area | km² |
-| `EN.POP.DNST` | Population density | people per km² of land area |
-| `NY.GDP.MKTP.CD` | GDP | current US$ |
-| `NY.GDP.MKTP.KD.ZG` | GDP growth | annual % |
-| `NY.GNP.PCAP.CD` | GNI per capita, Atlas method | current US$ |
-| `NY.GNP.PCAP.PP.CD` | GNI per capita, PPP | current international $ |
+Every indicator is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The World Bank compiles them from the original sources listed in each indicator's metadata:
+
+| Indicator | Name | Unit | Source |
+|---|---|---|---|
+| `SP.POP.TOTL` | Population, total | people | UN Population Division, World Population Prospects; national statistical offices; Eurostat, Demographic Statistics; UN Statistics Division, Population and Vital Statistics Report |
+| `AG.SRF.TOTL.K2` | Surface area | km² | Food and Agriculture Organization of the United Nations (FAO) |
+| `EN.POP.DNST` | Population density | people per km² of land area | FAO population estimates; World Bank population estimates |
+| `NY.GDP.MKTP.CD` | GDP | current US$ | National statistical organizations and/or central banks; OECD National Accounts data files; World Bank staff estimates |
+| `NY.GDP.MKTP.KD.ZG` | GDP growth | annual % | National statistical organizations and/or central banks; OECD National Accounts data files; World Bank staff estimates |
+| `NY.GNP.PCAP.CD` | GNI per capita, Atlas method | current US$ | National statistical organizations and/or central banks; OECD National Accounts data files; World Bank staff estimates |
+| `NY.GNP.PCAP.PP.CD` | GNI per capita, PPP | current international $ | World Bank, International Comparison Program (ICP); Eurostat and OECD PPP Programmes; OECD National Accounts data files; IMF World Economic Outlook database; World Bank staff estimates |
 
 ## Table `exposure`
 
