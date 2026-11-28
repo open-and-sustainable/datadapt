@@ -771,12 +771,17 @@ end
         gdp = Dict(("USA", 1980) => 3e6, ("USA", 2023) => 1e6, ("NOR", 2000) => 5e6)
         k = DatAdapt.capital_stock_country_year(raw, gdp)
         @test k.country_code == ["USA", "USA", "TWN", "NOR"] && k.year == [1980, 2023, 2000, 2000]
-        # PWT's capital over its GDP, times the World Bank's GDP; PWT's own
-        # conversion, cn × pl_n in millions, where either GDP is missing
-        @test k.capital_stock_current_usd ≈ [0.5 / 0.5 * 3e6, 4.5 / 1.5 * 1e6, 2.0e6, 2.0e6]
-        # The structures share of the four assets
-        @test k.structures_current_usd[[1, 2, 4]] ≈ [3e6 * 6 / 8, 3e6 * 8 / 12, 2.0e6 * 1 / 2]
+        # PWT's own measure, cn × pl_n in millions
+        @test k.capital_stock_current_usd ≈ [0.5e6, 4.5e6, 2.0e6, 2.0e6]
+        # PWT's capital over its GDP, times the World Bank's GDP; missing
+        # where either GDP is
+        @test k.capital_stock_current_usd_wb_aligned[1:2] ≈ [0.5 / 0.5 * 3e6, 4.5 / 1.5 * 1e6]
+        @test all(ismissing, k.capital_stock_current_usd_wb_aligned[3:4])
+        # The structures share of the four assets, for both measures
+        @test k.structures_current_usd[[1, 2, 4]] ≈ [0.5e6 * 6 / 8, 4.5e6 * 8 / 12, 2.0e6 * 1 / 2]
+        @test k.structures_current_usd_wb_aligned[1:2] ≈ [3e6 * 6 / 8, 3e6 * 8 / 12]
         @test ismissing(k.structures_current_usd[3])
+        @test all(ismissing, k.structures_current_usd_wb_aligned[3:4])
     end
 
     @testset "UN population files keep countries only" begin

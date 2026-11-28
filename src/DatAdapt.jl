@@ -253,32 +253,37 @@ end
 The capital stock in current US\$ of every country and year of the raw table
 `capital_stock` that has one, as `country_code`, `year` and:
 
-- `capital_stock_current_usd`: PWT's capital stock over its GDP, both at
-  market exchange rates (`cn` × `pl_n` over `cgdpo` × `pl_gdpo`), times the
-  World Bank's GDP in current US\$ of the country and year in `gdp`, keyed by
-  (country, year), so the stock is converted to dollars as that GDP is. Where
-  either GDP is missing, it is PWT's own conversion, `cn` × `pl_n` × 10⁶ (PWT
+- `capital_stock_current_usd`: PWT's own measure, `cn` × `pl_n` × 10⁶ (PWT
   is in millions);
-- `structures_current_usd`: its residential and non-residential structures,
-  the share of `Nc_Struc` in the current-cost net stock of the four assets,
-  missing where any of them is.
+- `capital_stock_current_usd_wb_aligned`: PWT's capital stock over its GDP,
+  both at market exchange rates (`cn` × `pl_n` over `cgdpo` × `pl_gdpo`),
+  times the World Bank's GDP in current US\$ of the country and year in
+  `gdp`, keyed by (country, year), so the stock is converted to dollars as
+  that GDP is; missing where either GDP is;
+- `structures_current_usd` and `structures_current_usd_wb_aligned`: the
+  residential and non-residential structures of each, the share of
+  `Nc_Struc` in the current-cost net stock of the four assets, missing where
+  any of them is.
 
 PWT's country codes are the country map's.
 """
 function capital_stock_country_year(capital::DataFrame, gdp::AbstractDict)
     rows = capital[.!ismissing.(capital.cn) .& .!ismissing.(capital.pl_n), :]
-    stock = map(eachrow(rows)) do row
-        own = row.cn * row.pl_n * 1e6
+    own = Float64.(rows.cn .* rows.pl_n .* 1e6)
+    aligned = map(eachrow(rows), own) do row, k
         pwt_gdp = row.cgdpo * row.pl_gdpo * 1e6
         wb_gdp = get(gdp, (row.countrycode, row.year), missing)
-        (ismissing(pwt_gdp) || pwt_gdp <= 0 || ismissing(wb_gdp)) && return Float64(own)
-        return Float64(own / pwt_gdp * wb_gdp)
+        (ismissing(pwt_gdp) || pwt_gdp <= 0 || ismissing(wb_gdp)) && return missing
+        return Float64(k / pwt_gdp * wb_gdp)
     end
     assets = rows.Nc_Struc .+ rows.Nc_Mach .+ rows.Nc_TraEq .+ rows.Nc_Other
-    structures = Union{Missing, Float64}[(ismissing(a) || a <= 0) ? missing : k * s / a
-                                         for (k, s, a) in zip(stock, rows.Nc_Struc, assets)]
+    share = Union{Missing, Float64}[(ismissing(a) || a <= 0) ? missing : s / a
+                                    for (s, a) in zip(rows.Nc_Struc, assets)]
     return DataFrame(country_code = String.(rows.countrycode), year = Int.(rows.year),
-                     capital_stock_current_usd = stock, structures_current_usd = structures)
+                     capital_stock_current_usd = own,
+                     capital_stock_current_usd_wb_aligned = Vector{Union{Missing, Float64}}(aligned),
+                     structures_current_usd = own .* share,
+                     structures_current_usd_wb_aligned = aligned .* share)
 end
 
 function transform_data(table::String)
