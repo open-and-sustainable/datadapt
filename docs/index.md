@@ -9,7 +9,7 @@ DatAdapt provides country-level data on three variables, from 1980 to 2025:
 
 - **hazard**: how often, how widely and how severely eight types of climate-related hazard struck each country in each year, from the ERA5 reanalysis;
 - **damage**: the disasters recorded in EM-DAT and their human and economic losses;
-- **exposure**: population, area and economy, from the World Bank's World Development Indicators.
+- **exposure**: population, area and economy, from the World Bank's World Development Indicators, and capital stock, from the Penn World Table.
 
 The three variables are kept independent: none of them is weighted by, or derived from, another. The one exception is the money value of deaths and injuries in the [processed damage data](processed/damage.html#step-3-deaths-and-injuries-in-money), which uses each country's GNI per capita. How the variables are combined is left to the analyses that use them.
 
@@ -21,7 +21,7 @@ The data come in two DuckDB databases, distributed separately from the code in t
 
 | Database | Tables | Content |
 |---|---|---|
-| `raw/DatAdapt.duckdb` | [`hazard`](raw/hazard.html), [`population_by_age` and `life_expectancy_by_age`](raw/damage.html#population-and-life-expectancy-by-age) (for damage), [`exposure`](raw/exposure.html) | The data as fetched from each source, or for hazard as computed from it |
+| `raw/DatAdapt.duckdb` | [`hazard`](raw/hazard.html), [`population_by_age` and `life_expectancy_by_age`](raw/damage.html#population-and-life-expectancy-by-age) (for damage), [`exposure` and `capital_stock`](raw/exposure.html) | The data as fetched from each source, or for hazard as computed from it |
 | `processed/DatAdapt.duckdb` | [`hazard_country_year`](processed/hazard.html), [`damage_country_event_year`](processed/damage.html), [`exposure_country_year`](processed/exposure.html) | The raw tables on one country map, in the shape used for analysis |
 
 The raw table `damage` is not included, because EM-DAT's licence does not allow redistributing its records; its [page](raw/damage.html) gives the steps to build it, in the local file `raw/DatAdapt_damage.duckdb`.
@@ -41,7 +41,7 @@ All processed tables, and the raw hazard table, use one country map, so the thre
 
 The pipeline is a Julia project. From the repository root:
 
-1. `fetch_data.sh` fetches the raw data: exposure from the World Bank API, damage from an EM-DAT excerpt and the UN's population and life tables, and the ERA5 grids for hazard.
+1. `fetch_data.sh` fetches the raw data: exposure from the World Bank API and the Penn World Table, damage from an EM-DAT excerpt and the UN's population and life tables, and the ERA5 grids for hazard.
 2. `compute_hazard_national.sh` computes the raw hazard table from the grids.
 3. `transform_data.sh` makes the processed tables (it also holds the one-off installation of DuckDB's PRQL extension, which the transformations are written in).
 
@@ -72,6 +72,7 @@ Author: Riccardo Boero ([ORCID 0000-0002-7468-9096](https://orcid.org/0000-0002-
 - **Damage:** Emergency Events Database (EM-DAT), UCLouvain / CRED, Brussels, Belgium, version 2026-07-17, accessed on 2026-07-20, [https://www.emdat.be/](https://www.emdat.be/). Delforge, D., Wathelet, V., Below, R., Lanfredi Sofia, C., Tonnelier, M., van Loenhout, J. A. F., & Speybroeck, N. (2025). EM-DAT: The Emergency Events Database. *International Journal of Disaster Risk Reduction*, 124, 105509. [https://doi.org/10.1016/j.ijdrr.2025.105509](https://doi.org/10.1016/j.ijdrr.2025.105509)
 - **Damage (population and life expectancy by age):** United Nations, Department of Economic and Social Affairs, Population Division (2024). *World Population Prospects 2024, Online Edition*. [https://population.un.org/wpp/](https://population.un.org/wpp/) (accessed on 2026-11-26). Licensed under [CC BY 3.0 IGO](https://creativecommons.org/licenses/by/3.0/igo/).
 - **Exposure:** The World Bank: World Development Indicators, [https://datatopics.worldbank.org/world-development-indicators/](https://datatopics.worldbank.org/world-development-indicators/) (accessed on 2026-07-21). Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+- **Exposure (capital stock):** Groningen Growth and Development Centre (2025). *Penn World Table version 11.0*. DataverseNL. [https://doi.org/10.34894/FABVLR](https://doi.org/10.34894/FABVLR) (accessed on 2026-11-27). Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Feenstra, R. C., Inklaar, R., & Timmer, M. P. (2015). The Next Generation of the Penn World Table. *American Economic Review*, 105(10), 3150–3182. [https://doi.org/10.1257/aer.20130954](https://doi.org/10.1257/aer.20130954)
 
 ## Licence
 

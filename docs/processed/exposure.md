@@ -5,11 +5,11 @@ layout: default
 
 # Processed exposure data
 
-The processed table `exposure_country_year` (in `DatAdapt-database/processed/DatAdapt.duckdb`) holds the seven [World Bank indicators](../raw/exposure.html) as one row per country and year, on the [shared country map](../index.html#countries). It is made by `transform_data("exposure")` (in `transform_data.sh`) in two steps.
+The processed table `exposure_country_year` (in `DatAdapt-database/processed/DatAdapt.duckdb`) holds the seven [World Bank indicators](../raw/exposure.html) and the [capital stock of the Penn World Table](../raw/exposure.html#table-capital_stock) as one row per country and year, on the [shared country map](../index.html#countries). It is made by `transform_data("exposure")` (in `transform_data.sh`) in three steps.
 
 ## Step 1: economies only, on the shared codes
 
-The World Bank's aggregates are left out: its regions, income groups, lending groups and the world, as listed in `country_mappings/exposure_world_bank_aggregates.csv` (from the World Bank's own country list), together with the rows that have no country code. Kosovo's World Bank code `XKX` becomes `XKO`, the code used for damage and hazard (`locate_exposure` in `src/CountryMapping.jl`).
+The World Bank's aggregates are left out: its regions, income groups, lending groups and the world, as listed in `country_mappings/exposure_world_bank_aggregates.csv` (from the World Bank's own country list), together with the rows that have no country code. Kosovo's World Bank code `XKX` becomes `XKO`, the code used for damage and hazard (`locate_exposure` in `src/CountryMapping.jl`). The Penn World Table's codes are already the map's.
 
 ## Step 2: one column per indicator
 
@@ -26,3 +26,23 @@ The long raw table is turned into one row per country and year, with one column 
 | `gdp_growth_annual_percent` | GDP growth, annual % (`NY.GDP.MKTP.KD.ZG`) |
 | `gni_per_capita_atlas_usd` | GNI per capita, Atlas method, current US$ (`NY.GNP.PCAP.CD`) |
 | `gni_per_capita_ppp_usd` | GNI per capita, PPP, current international $ (`NY.GNP.PCAP.PP.CD`) |
+| `capital_stock_current_usd` | Capital stock, current US$ (step 3) |
+| `structures_current_usd` | Capital stock in residential and non-residential structures, current US$ (step 3) |
+
+## Step 3: capital stock in current US$
+
+The capital stock is added in current US dollars at market exchange rates, like the GDP, as a measure of the assets exposed (`capital_stock_country_year` in `src/DatAdapt.jl`):
+
+- `capital_stock_current_usd` is PWT's capital stock over its GDP, both in current US$ (`cn` × `pl_n` and `cgdpo` × `pl_gdpo`), times the World Bank's GDP in current US$ of the country and year. The exchange rate PWT converts with cancels out of the ratio, so the stock is converted to dollars as the World Bank's GDP is, and `capital_stock_current_usd` / `gdp_current_usd` is PWT's own ratio of capital to GDP. Converted with PWT's exchange rate instead, the stock would be more than 10% different in 1,704 of the 7,353 country-years that have both GDPs, mostly in the 1980s and 1990s, where official and market exchange rates diverged: Iraq's stock in 1992 would be 79 times its World Bank GDP, against 4.4 times in PWT's own figures.
+- Where the World Bank has no GDP, `capital_stock_current_usd` is PWT's own conversion, `cn` × `pl_n`, in dollars rather than PWT's millions. This is the case for 328 country-years: Taiwan, Anguilla, Montserrat and the British Virgin Islands in every year, the Cayman Islands to 2005, the Turks and Caicos Islands to 2000, and the years before the World Bank's series start for some countries, mostly in the 1980s and early 1990s, such as Palestine, Mozambique, Poland, Lebanon and Romania.
+- `structures_current_usd` is its part in residential and non-residential structures, that is buildings and infrastructure: the total times the share of `Nc_Struc` in the current-cost net stocks of the four assets PWT distinguishes (structures, machinery and equipment, transport equipment and other assets), at national prices.
+
+The capital stock joins the World Bank's indicators on the country and year. Taiwan, Anguilla and Montserrat, which the World Bank has no series for, have rows of their own for 1980–2023, with the capital stock only. The two columns are empty where PWT has no value: for every country in 2024 and 2025, before 1990 for the successors of the Soviet Union, Yugoslavia and Czechoslovakia, and in every year for 40 countries of the map, among them Afghanistan, Cuba, North Korea, Somalia, South Sudan, Guyana, Papua New Guinea, Puerto Rico and most Pacific islands. Nothing is filled in.
+
+## Data limitations and assumptions
+
+- **The capital stock is estimated, not observed.** PWT builds it from each country's past investment in each asset, less depreciation.
+- **It ends in 2023.** PWT 11.0 has no later year, so 2024 and 2025 are empty.
+- **It moves with exchange rates.** Like the GDP in current US$, the stock is converted at each year's market exchange rate, so it changes with the exchange rate as well as with the assets.
+- **Two conversions in one column.** The 328 country-years without a World Bank GDP are converted with PWT's exchange rate, the others as the World Bank's GDP is (step 3).
+- **The ratio to GDP is PWT's, and in places very high.** The stock is more than 8 times the GDP in Tajikistan and Ukraine from 1994, Nigeria in 1982–2001, Venezuela from 2017 (up to 38 times) and, in fewer years, a dozen other countries. These are PWT's estimates, kept as they are.

@@ -42,6 +42,11 @@ const EXPOSURE_SOURCE = "The World Bank: World Development Indicators, " *
     "https://datatopics.worldbank.org/world-development-indicators/, " *
     "licensed under CC BY 4.0; original sources of each indicator in " *
     "https://open-and-sustainable.github.io/datadapt/raw/exposure.html"
+const CAPITAL_STOCK_SOURCE = "Groningen Growth and Development Centre (2025): " *
+    "Penn World Table version 11.0. DataverseNL. https://doi.org/10.34894/FABVLR, " *
+    "licensed under CC BY 4.0; Feenstra, R. C., Inklaar, R., & Timmer, M. P. " *
+    "(2015). The Next Generation of the Penn World Table. American Economic " *
+    "Review, 105(10), 3150-3182. https://doi.org/10.1257/aer.20130954"
 const DAMAGE_SOURCE = "Emergency Events Database (EM-DAT), UCLouvain / CRED, " *
     "Brussels, Belgium, https://www.emdat.be/; Delforge, D., Wathelet, V., " *
     "Below, R., Lanfredi Sofia, C., Tonnelier, M., van Loenhout, J. A. F., & " *
@@ -67,6 +72,18 @@ function fetch_exposure_data()
         DatabaseAccess.update_metadata!(con, "exposure", START_YEAR, END_YEAR,
             EXPOSURE_SOURCE)
     end
+end
+
+# Capital stock by country, from the Penn World Table, for exposure. Pass `dir`
+# to keep the downloaded files between runs.
+function fetch_capital_stock_data(; dir::String = mktempdir())
+    capital = ExposureDataFetch.fetch_capital_stock_data(START_YEAR, END_YEAR; dir = dir)
+    DatabaseAccess.with_connection(DB_PATH_RAW) do con
+        DatabaseAccess.write_duckdb_table!(capital, con, "capital_stock")
+        DatabaseAccess.update_metadata!(con, "capital_stock", extrema(capital.year)...,
+            CAPITAL_STOCK_SOURCE)
+    end
+    logmsg("Wrote $(nrow(capital)) rows to table capital_stock in $DB_PATH_RAW.")
 end
 
 function fetch_damage_data()
@@ -230,6 +247,40 @@ function value_human_losses(damage::DataFrame)
     return valued
 end
 
+"""
+    capital_stock_country_year(capital, gdp) -> DataFrame
+
+The capital stock in current US\$ of every country and year of the raw table
+`capital_stock` that has one, as `country_code`, `year` and:
+
+- `capital_stock_current_usd`: PWT's capital stock over its GDP, both at
+  market exchange rates (`cn` × `pl_n` over `cgdpo` × `pl_gdpo`), times the
+  World Bank's GDP in current US\$ of the country and year in `gdp`, keyed by
+  (country, year), so the stock is converted to dollars as that GDP is. Where
+  either GDP is missing, it is PWT's own conversion, `cn` × `pl_n` × 10⁶ (PWT
+  is in millions);
+- `structures_current_usd`: its residential and non-residential structures,
+  the share of `Nc_Struc` in the current-cost net stock of the four assets,
+  missing where any of them is.
+
+PWT's country codes are the country map's.
+"""
+function capital_stock_country_year(capital::DataFrame, gdp::AbstractDict)
+    rows = capital[.!ismissing.(capital.cn) .& .!ismissing.(capital.pl_n), :]
+    stock = map(eachrow(rows)) do row
+        own = row.cn * row.pl_n * 1e6
+        pwt_gdp = row.cgdpo * row.pl_gdpo * 1e6
+        wb_gdp = get(gdp, (row.countrycode, row.year), missing)
+        (ismissing(pwt_gdp) || pwt_gdp <= 0 || ismissing(wb_gdp)) && return Float64(own)
+        return Float64(own / pwt_gdp * wb_gdp)
+    end
+    assets = rows.Nc_Struc .+ rows.Nc_Mach .+ rows.Nc_TraEq .+ rows.Nc_Other
+    structures = Union{Missing, Float64}[(ismissing(a) || a <= 0) ? missing : k * s / a
+                                         for (k, s, a) in zip(stock, rows.Nc_Struc, assets)]
+    return DataFrame(country_code = String.(rows.countrycode), year = Int.(rows.year),
+                     capital_stock_current_usd = stock, structures_current_usd = structures)
+end
+
 function transform_data(table::String)
     if table == "damage"
         # Process the "damage" table, with each event assigned to the
@@ -253,18 +304,27 @@ function transform_data(table::String)
         end
     elseif table == "exposure"
         # Process the "exposure" table, countries only, with codes aligned
-        # to the ones used for damage
-        exposure = DatabaseAccess.with_connection(DB_PATH_RAW) do con
-            DataFrame(DBInterface.execute(con, "SELECT * FROM exposure"))
+        # to the ones used for damage, and add the capital stock
+        exposure, capital = DatabaseAccess.with_connection(DB_PATH_RAW; readonly = true) do con
+            (DataFrame(DBInterface.execute(con, "SELECT * FROM exposure")),
+             DataFrame(DBInterface.execute(con, "SELECT * FROM capital_stock")))
         end
         located = CountryMapping.locate_exposure(exposure)
         E_processed = DatabaseAccess.executePRQL(DB_PATH_RAW,
             "src/DataTransform/exposure_country_year.prql";
             tables = Dict("exposure_located" => located))
+        nrow(E_processed) > 0 || error("The exposure PRQL step returned no rows; nothing written.")
+        # Countries the World Bank has no series for, such as Taiwan, keep
+        # their capital stock in rows of their own
+        gdp = Dict((row.country_code, row.year) => row.gdp_current_usd
+                   for row in eachrow(E_processed) if !ismissing(row.gdp_current_usd))
+        E_processed = sort!(outerjoin(E_processed, capital_stock_country_year(capital, gdp),
+                                      on = [:country_code, :year]), [:country_code, :year])
         DatabaseAccess.with_connection(DB_PATH_PROCESSED) do con
             DatabaseAccess.write_duckdb_table!(E_processed, con, "exposure_country_year")
             DatabaseAccess.update_metadata!(con, "exposure_country_year",
-                START_YEAR, END_YEAR, "Derived from the raw exposure table. Source: " * EXPOSURE_SOURCE)
+                START_YEAR, END_YEAR, "Derived from the raw tables exposure and capital_stock. " *
+                "Sources: " * EXPOSURE_SOURCE * "; " * CAPITAL_STOCK_SOURCE)
         end
     elseif table == "hazard"
         # Process the national hazard values of the raw database (see

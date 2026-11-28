@@ -741,6 +741,44 @@ end
         @test isequal(located.value, [4085620.0, missing, 0.15])
     end
 
+    @testset "PWT files become the raw capital stock table" begin
+        dir = mktempdir()
+        main, detail = joinpath(dir, "main.xlsx"), joinpath(dir, "detail.xlsx")
+        DatAdapt.ExposureDataFetch.XLSX.writetable(main, DataFrame(countrycode = ["USA", "USA", "USA", "AIA"],
+            country = ["United States", "United States", "United States", "Anguilla"],
+            year = [1979, 1980, 2023, 1980], cn = [1.0, 2.0, 3.0, missing],
+            pl_n = [0.5, 0.25, 1.5, missing], cgdpo = [1.0, 1.0, 1.0, 1.0],
+            pl_gdpo = [1.0, 0.5, missing, 1.0], rgdpe = [9.0, 9.0, 9.0, 9.0]); sheetname = "Data")
+        DatAdapt.ExposureDataFetch.XLSX.writetable(detail, DataFrame(countrycode = ["USA", "USA"], year = [1980, 2023],
+            Nc_Struc = [6.0, 8.0], Nc_Mach = [1.0, 1.0], Nc_TraEq = [1.0, 1.0],
+            Nc_Other = [0.0, missing], Np_Struc = [9.0, 9.0]); sheetname = "Data")
+        df = DatAdapt.ExposureDataFetch.read_pwt(main, detail, 1980, 2025)
+        @test names(df) == ["countrycode", "year", "cn", "pl_n", "cgdpo", "pl_gdpo",
+                            "Nc_Struc", "Nc_Mach", "Nc_TraEq", "Nc_Other"]
+        @test df.countrycode == ["AIA", "USA", "USA"] && df.year == [1980, 1980, 2023]
+        @test isequal(df.cn, [missing, 2.0, 3.0]) && isequal(df.Nc_Struc, [missing, 6.0, 8.0])
+        @test isequal(df.pl_gdpo, [1.0, 0.5, missing])
+        @test isequal(df.Nc_Other, [missing, 0.0, missing])
+    end
+
+    @testset "capital stock in current US dollars" begin
+        raw = DataFrame(countrycode = ["AIA", "USA", "USA", "TWN", "NOR"],
+                        year = [1980, 1980, 2023, 2000, 2000],
+                        cn = [missing, 2.0, 3.0, 4.0, 2.0], pl_n = [missing, 0.25, 1.5, 0.5, 1.0],
+                        cgdpo = [1.0, 1.0, 2.0, 1.0, 1.0], pl_gdpo = [1.0, 0.5, 0.75, 1.0, missing],
+                        Nc_Struc = [missing, 6.0, 8.0, 3.0, 1.0], Nc_Mach = [missing, 1.0, 1.0, 1.0, 1.0],
+                        Nc_TraEq = [missing, 1.0, 1.0, missing, 0.0], Nc_Other = [missing, 0.0, 2.0, 0.0, 0.0])
+        gdp = Dict(("USA", 1980) => 3e6, ("USA", 2023) => 1e6, ("NOR", 2000) => 5e6)
+        k = DatAdapt.capital_stock_country_year(raw, gdp)
+        @test k.country_code == ["USA", "USA", "TWN", "NOR"] && k.year == [1980, 2023, 2000, 2000]
+        # PWT's capital over its GDP, times the World Bank's GDP; PWT's own
+        # conversion, cn × pl_n in millions, where either GDP is missing
+        @test k.capital_stock_current_usd ≈ [0.5 / 0.5 * 3e6, 4.5 / 1.5 * 1e6, 2.0e6, 2.0e6]
+        # The structures share of the four assets
+        @test k.structures_current_usd[[1, 2, 4]] ≈ [3e6 * 6 / 8, 3e6 * 8 / 12, 2.0e6 * 1 / 2]
+        @test ismissing(k.structures_current_usd[3])
+    end
+
     @testset "UN population files keep countries only" begin
         dir = mktempdir()
         header = "SortOrder,LocID,Notes,ISO3_code,ISO2_code,SDMX_code,LocTypeID," *
